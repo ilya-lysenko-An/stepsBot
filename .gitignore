@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite
+*.db
+*.sqlite3
+
+# Env / secrets
+token.env
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
