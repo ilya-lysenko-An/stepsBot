@@ -44,5 +44,27 @@ def get_user_id(tg_id: int):
         cur.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,))
         row = cur.fetchone()
         return row[0] if row else None
+    
+def upsert_steps(user_id: int, day: str, steps: int):
+    with get_con as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO steps (user_id, day, steps)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, day)
+            DO UPDATE SET steps = excluded.steps
+        """, (user_id, day, steps))
+        conn.commit()
 
-        
+def get_top10_for_day(day: str):
+    with get_con as conn:
+        cur = conn.cursor()
+        cur.execute(""" 
+        SELECT u.first_name, u.username, s.steps
+        FROM steps s
+        JOIN users u ON s.user_id = u.id
+        WHERE s.day = ?
+        ORDER BY s.steps DESC
+        LIMIT 10           
+        """, (day,))
+        return cur.fetchall()    
