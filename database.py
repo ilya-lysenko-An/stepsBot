@@ -28,5 +28,21 @@ def init_con():
                     );
         """)
         conn.commit()
-        
+
+def add_users(tg_id: int, username: str, first_name: str, club: str = None):
+    with get_con as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT OR IGNORE INTO users (tg_id, username, first_name, club)
+            VALUES (?, ?, ?, ?)       
+        """, (tg_id, username, first_name, club))
+        conn.commit()
+
+def get_user_id(tg_id: int):
+    with get_con as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
         
