@@ -5,7 +5,7 @@ DB_PATH = "steps.db"
 def get_con():
     return sqlite3.connect(DB_PATH)
 
-def init_con():
+def init_db():
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
@@ -29,8 +29,8 @@ def init_con():
         """)
         conn.commit()
 
-def add_users(tg_id: int, username: str, first_name: str, club: str = None):
-    with get_con as conn:
+def add_user(tg_id: int, username: str, first_name: str, club: str = None):
+    with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
             INSERT OR IGNORE INTO users (tg_id, username, first_name, club)
@@ -39,14 +39,14 @@ def add_users(tg_id: int, username: str, first_name: str, club: str = None):
         conn.commit()
 
 def get_user_id(tg_id: int):
-    with get_con as conn:
+    with get_con() as conn:
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,))
         row = cur.fetchone()
         return row[0] if row else None
     
 def upsert_steps(user_id: int, day: str, steps: int):
-    with get_con as conn:
+    with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO steps (user_id, day, steps)
@@ -57,7 +57,7 @@ def upsert_steps(user_id: int, day: str, steps: int):
         conn.commit()
 
 def get_top10_for_day(day: str):
-    with get_con as conn:
+    with get_con() as conn:
         cur = conn.cursor()
         cur.execute(""" 
         SELECT u.first_name, u.username, s.steps
