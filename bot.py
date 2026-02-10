@@ -15,7 +15,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [["Ввести шаги", "Редактировать шаги"]],
+    [["Ввести шаги", "Меню"]],
+    resize_keyboard=True
+)
+
+MENU_KEYBOARD = ReplyKeyboardMarkup(
+     [["Редактировать шаги", "Уведомления"],
+      ["Статистика", "Назад"]],
+      resize_keyboard=True
+)
+
+STATS_KEYBOARD = ReplyKeyboardMarkup(
+    [["Топ 30 all time", "Топ 10 вчера"],
+    ["Моя активность", "Отставание от лидера"],
+    ["Место в топе", "Назад"]],
     resize_keyboard=True
 )
 
@@ -48,10 +61,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text("позже написать текст преветсвенного соо")
     await update.message.reply_text("Выбери действие", reply_markup=MAIN_KEYBOARD)
+    context.user_data["menu"] = "main"
+    context.user_data["state"] = None
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = context.user_data.get("state")
+
+    if text == "Меню":
+        context.user_data["menu"] = "menu"
+        await update.message.reply_text("Меню:", reply_markup=MENU_KEYBOARD)
+        return
+
+    if text == "Назад":
+        current = context.user_data.get("menu", "main")
+        if current == "stats":
+            context.user_data["menu"] = "menu"
+            await update.message.reply_text("Меню:", reply_markup=MENU_KEYBOARD)
+        else:
+            context.user_data["menu"] = "main"
+            await update.message.reply_text("Выбери действие", reply_markup=MAIN_KEYBOARD)
+        return
+
+    if text == "Уведомления":
+        await update.message.reply_text("Раздел уведомлений в разработке.")
+        return
+
+    if text == "Статистика":
+        context.user_data["menu"] = "stats"
+        await update.message.reply_text("Статистика:", reply_markup=STATS_KEYBOARD)
+        return
+
+    if text == "Топ 30 all time":
+        await update.message.reply_text("Раздел в разработке.")
+        return
+
+    if text == "Топ 10 вчера":
+        await update.message.reply_text("Раздел в разработке.")
+        return
+
+    if text == "Моя активность":
+        await update.message.reply_text("Раздел в разработке.")
+        return
+
+    if text == "Отставание от лидера":
+        await update.message.reply_text("Раздел в разработке.")
+        return
+
+    if text == "Место в топе":
+        await update.message.reply_text("Раздел в разработке.")
+        return
 
     if state == "awaiting_steps_today":
         if not text.isdigit():
@@ -66,14 +125,13 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tg_id=user.id,
                 username=user.username,
                 first_name=user.first_name,
-                club = None
+                club=None
             )
             user_id = database.get_user_id(user.id)
         
         today = datetime.date.today().isoformat()
-        database.upsert_steps(user_id= user_id, day= today, steps= steps)
+        database.upsert_steps(user_id=user_id, day=today, steps=steps)
         logger.info(f"Шаги сохранены: user_id={user_id}, day={today}, steps={steps}")
-
 
         context.user_data["state"] = None
         await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
@@ -95,7 +153,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Введи число.")
             return
         
-        steps =int(text)
+        steps = int(text)
         day = context.user_data.get("edit_date")
 
         user = update.effective_user
@@ -103,9 +161,9 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id is None:
             database.add_user(
                 tg_id=user.id,
-                username= user.username,
+                username=user.username,
                 first_name=user.first_name,
-                club = None
+                club=None
             )
             user_id = database.get_user_id(user.id)
 
@@ -117,14 +175,15 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
         return
 
-
     if text == "Ввести шаги":
         context.user_data["state"] = "awaiting_steps_today"
         await update.message.reply_text("Введи количество шагов за сегодня.")
-    elif text == "Редактировать шаги":
+        return
+
+    if text == "Редактировать шаги":
         context.user_data["state"] = "awaiting_edit_date"
         await update.message.reply_text("Введи дату в формате ДД.ММ.")
-
+        return
 
 
 def main():
