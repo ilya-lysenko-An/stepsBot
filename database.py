@@ -67,4 +67,15 @@ def get_top10_for_day(day: str):
         ORDER BY s.steps DESC
         LIMIT 10           
         """, (day,))
-        return cur.fetchall()    
+        return cur.fetchall() 
+    
+def update_user_club(user_id: int, club: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE users
+            SET club = ?
+            WHERE id = ?
+        """, (club, user_id))
+        conn.commit()
+
