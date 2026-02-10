@@ -14,6 +14,11 @@ TOKEN = os.getenv("BOT_TOKEN")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+JOIN_KEYBOARD = ReplyKeyboardMarkup(
+    [["УЧАСТВУЮ"]],
+    resize_keyboard=True
+)
+
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [["Ввести шаги", "Меню"]],
     resize_keyboard=True
@@ -52,20 +57,29 @@ def parse_ddmm(text: str):
     return dt.isoformat()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    database.add_user(
-        tg_id=user.id,
-        username=user.username,
-        first_name=user.first_name,
-        club = None
-    )
-    await update.message.reply_text("позже написать текст преветсвенного соо")
-    await update.message.reply_text("Выбери действие", reply_markup=MAIN_KEYBOARD)
     context.user_data["menu"] = "main"
     context.user_data["state"] = None
 
+    await update.message.reply_text("Тут будет текст правил…")
+    await update.message.reply_text("Нажми кнопку для участия", reply_markup=JOIN_KEYBOARD)
+
+
+
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+
+    if text == "УЧАСТВУЮ":
+        user = update.effective_user
+        database.add_user(
+            tg_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            club=None
+        )
+        context.user_data["state"] = "awaiting_club"
+        await update.message.reply_text("Напиши свой клуб, если клуба нет пиши 'нет'.")
+        return
+
     state = context.user_data.get("state")
 
     if text == "Меню":
@@ -136,6 +150,27 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = None
         await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
         return
+    
+    if state == "awaiting_club":
+        club_text = text.strip()
+        club = None if club_text.lower() == "нет" else club_text
+
+        user = update.effective_user
+        user_id = database.get_user_id(user.id)
+        if user_id is None:
+            database.add_user(
+                tg_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                club=club
+            )
+        else:
+            database.update_user_club(user_id=user_id, club=club)  # нужна функция
+
+        context.user_data["state"] = None
+        await update.message.reply_text("Готово! Теперь можно ввести шаги.", reply_markup=MAIN_KEYBOARD)
+        return
+
     
     if state == "awaiting_edit_date":
         day_iso = parse_ddmm(text)
