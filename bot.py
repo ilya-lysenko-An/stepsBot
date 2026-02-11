@@ -222,7 +222,23 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "awaiting_edit_date"
         await update.message.reply_text("Введи дату в формате ДД.ММ.")
         return
+    
+async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    tz = ZoneInfo("Europe/Moscow")
+    today = datetime.datetime.now(tz).date().isoformat()
 
+    missing_users = database.get_users_missing_day(today)
+
+    for user_id, tg_id, missed_streak in missing_users:
+        await context.bot.send_message(
+            chat_id=tg_id,
+            text="Соо для внесения шагов"
+        )
+
+        database.increment_missed_streak(user_id)
+
+        if missed_streak + 1 >= 7:
+            database.disable_notifications(user_id)
 
 def main():
     if not TOKEN:
