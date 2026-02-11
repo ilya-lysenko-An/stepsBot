@@ -6,7 +6,9 @@ from telegram import ReplyKeyboardMarkup
 from telegram.ext import MessageHandler, filters
 import database
 import os 
-from dotenv import load_dotenv  
+from dotenv import load_dotenv 
+from zoneinfo import ZoneInfo
+from datetime import timedelta
 
 load_dotenv("token.env")
 TOKEN = os.getenv("BOT_TOKEN")
@@ -145,6 +147,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         today = datetime.date.today().isoformat()
         database.upsert_steps(user_id=user_id, day=today, steps=steps)
+        database.reset_missed_streak(user_id=user_id)
         logger.info(f"Шаги сохранены: user_id={user_id}, day={today}, steps={steps}")
 
         context.user_data["state"] = None
