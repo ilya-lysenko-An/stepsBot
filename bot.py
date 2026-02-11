@@ -232,13 +232,33 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     for user_id, tg_id, missed_streak in missing_users:
         await context.bot.send_message(
             chat_id=tg_id,
-            text="Соо для внесения шагов"
+            text="Соо для внесения шагов" #Добавить сообщение с напоминанием ввести шаги 
         )
 
         database.increment_missed_streak(user_id)
 
         if missed_streak + 1 >= 7:
             database.disable_notifications(user_id)
+
+async def morning_top_job(context: ContextTypes.DEFAULT_TYPE):
+    tz = ZoneInfo("Europe/Moscow")
+    today = datetime.datetime.now(tz).date()
+    yesterday = (today - timedelta(days=1)).isoformat()
+
+    top10 = database.get_top10_for_day(yesterday)
+
+    lines = ["Соо топ 10 вчера"] # Добавить сообщение топ 10 за вчера 
+    for i, (first_name, username, steps) in enumerate(top10, start=1):
+        name = f"@{username}" if username else first_name or "Без имени"
+        lines.append(f"{i}. {name} — {steps}")
+
+    message = "\n".join(lines)
+
+    participants = database.get_participants()
+    for _, tg_id, notifications_enabled, _ in participants:
+        if notifications_enabled:
+            await context.bot.send_message(chat_id=tg_id, text=message)
+
 
 def main():
     if not TOKEN:
@@ -247,6 +267,16 @@ def main():
     database.init_db()
     logger.info("База данных инициализированна")
     app = Application.builder().token(TOKEN).build()
+    tz = ZoneInfo("Europe/Moscow")
+
+    app.job_queue.run_daily(
+        reminder_job,
+        time=datetime.time(hour=23, minute=0, tzinfo=tz)
+    )
+    app.job_queue.run_daily(
+        morning_top_job,
+        time=datetime.time(hour=7, minute=0, tzinfo=tz)
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
     logger.info("Бот запущен")
