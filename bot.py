@@ -64,12 +64,14 @@ def parse_ddmm(text: str):
     
     return dt.isoformat()
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["menu"] = "main"
     context.user_data["state"] = None
 
     await update.message.reply_text("Тут будет текст правил…")
     await update.message.reply_text("Нажми кнопку для участия", reply_markup=JOIN_KEYBOARD)
+
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -84,6 +86,16 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if await handle_actions(update, context, text):
         return
+
+
+def build_notify_keyboard(reminder_enabled: int, stats_enabled: int):
+    reminder_btn = "Выкл напоминание" if reminder_enabled else "Вкл напоминание"
+    stats_btn = "Выкл статистику" if stats_enabled else "Вкл статистику"
+    return ReplyKeyboardMarkup(
+        [[reminder_btn, stats_btn]],
+        resize_keyboard=True
+    )
+
 
 async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "УЧАСТВУЮ":
@@ -121,6 +133,7 @@ async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, t
 
     return False
 
+
 async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "Меню":
         context.user_data["menu"] = "menu"
@@ -138,8 +151,17 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
 
     if text == "Уведомления":
-        await update.message.reply_text("Раздел уведомлений в разработке.")
+        user = update.effective_user
+        settings = database.get_user_settings(user.id)
+        if settings is None:
+            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».", reply_markup=MENU_KEYBOARD)
+            return True
+
+        reminder_enabled, stats_enabled = settings
+        kb = build_notify_keyboard(reminder_enabled, stats_enabled)
+        await update.message.reply_text("Уведомления:", reply_markup=kb)
         return True
+
 
     if text == "Статистика":
         context.user_data["menu"] = "stats"
@@ -147,6 +169,7 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
 
     return False
+
 
 async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "Топ 30 all time":
@@ -170,6 +193,7 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
 
     return False
+
 
 async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     state = context.user_data.get("state")
@@ -240,6 +264,7 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
 
     return False
 
+
 async def handle_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "Ввести шаги":
         context.user_data["state"] = "awaiting_steps_today"
@@ -269,7 +294,8 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
         database.increment_missed_streak(user_id)
 
         if missed_streak + 1 >= 7:
-            database.disable_notifications(user_id)
+            database.disable_reminder(user_id)
+
 
 async def morning_top_job(context: ContextTypes.DEFAULT_TYPE):
     tz = ZoneInfo("Europe/Moscow")
@@ -286,8 +312,8 @@ async def morning_top_job(context: ContextTypes.DEFAULT_TYPE):
     message = "\n".join(lines)
 
     participants = database.get_participants()
-    for _, tg_id, notifications_enabled, _ in participants:
-        if notifications_enabled:
+    for _, tg_id, _, stats_enabled, _ in participants:
+        if stats_enabled:
             await context.bot.send_message(chat_id=tg_id, text=message)
 
 
@@ -312,6 +338,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
     logger.info("Бот запущен")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()

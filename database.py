@@ -32,6 +32,7 @@ def init_db():
         """)
         conn.commit()
 
+
 def add_user(tg_id: int, username: str, first_name: str, club: str = None):
     with get_con() as conn:
         cur = conn.cursor()
@@ -41,12 +42,25 @@ def add_user(tg_id: int, username: str, first_name: str, club: str = None):
         """, (tg_id, username, first_name, club))
         conn.commit()
 
+
 def get_user_id(tg_id: int):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,))
         row = cur.fetchone()
         return row[0] if row else None
+
+
+def get_user_settings(tg_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT reminder_enabled, stats_enabled
+            FROM users
+            WHERE tg_id = ?
+        """, (tg_id,))
+        return cur.fetchone()
+
 
 def update_user_club(user_id: int, club: str):
     with get_con() as conn:
@@ -58,6 +72,7 @@ def update_user_club(user_id: int, club: str):
         """, (club, user_id))
         conn.commit()
 
+
 def upsert_steps(user_id: int, day: str, steps: int):
     with get_con() as conn:
         cur = conn.cursor()
@@ -68,6 +83,7 @@ def upsert_steps(user_id: int, day: str, steps: int):
             DO UPDATE SET steps = excluded.steps
         """, (user_id, day, steps))
         conn.commit()
+
 
 def get_top10_for_day(day: str):
     with get_con() as conn:
@@ -82,6 +98,7 @@ def get_top10_for_day(day: str):
         """, (day,))
         return cur.fetchall()
 
+
 def get_participants():
     with get_con() as conn:
         cur = conn.cursor()
@@ -90,6 +107,7 @@ def get_participants():
             FROM users
         """)
         return cur.fetchall()
+
 
 def get_users_missing_day(day: str):
     with get_con() as conn:
@@ -104,6 +122,7 @@ def get_users_missing_day(day: str):
         """, (day,))
         return cur.fetchall()
     
+
 def increment_missed_streak(user_id: int):
     with get_con() as conn:
         cur = conn.cursor()
@@ -113,6 +132,7 @@ def increment_missed_streak(user_id: int):
             WHERE id = ?
         """, (user_id,))
         conn.commit()
+
 
 def reset_missed_streak(user_id: int):
     with get_con() as conn:
@@ -133,6 +153,7 @@ def enable_reminder(user_id: int):
         """, (user_id,))
         conn.commit()
 
+
 def disable_reminder(user_id: int):
     with get_con() as conn:
         cur = conn.cursor()
@@ -141,6 +162,7 @@ def disable_reminder(user_id: int):
         """, (user_id,))
         conn.commit()
 
+
 def enable_stats(user_id: int):
     with get_con() as conn:
         cur = conn.cursor()
@@ -148,6 +170,7 @@ def enable_stats(user_id: int):
             UPDATE users SET stats_enabled = 1 WHERE id = ?
         """, (user_id,))
         conn.commit()
+
 
 def disable_stats(user_id: int):
     with get_con() as conn:
