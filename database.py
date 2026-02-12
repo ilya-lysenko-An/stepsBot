@@ -15,7 +15,8 @@ def init_db():
                 username TEXT,
                 first_name TEXT,
                 club TEXT,
-                notifications_enabled INTEGER DEFAULT 1,
+                reminder_enabled INTEGER DEFAULT 1,
+                stats_enabled INTEGER DEFAULT 1,
                 missed_streak INTEGER DEFAULT 0
             );
         """)
@@ -85,7 +86,7 @@ def get_participants():
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, tg_id, notifications_enabled, missed_streak
+            SELECT id, tg_id, reminder_enabled, stats_enabled, missed_streak
             FROM users
         """)
         return cur.fetchall()
@@ -96,13 +97,13 @@ def get_users_missing_day(day: str):
         cur.execute("""
             SELECT u.id, u.tg_id, u.missed_streak
             FROM users u
-            WHERE u.notifications_enabled = 1
+            WHERE u.reminder_enabled = 1
             AND u.id NOT IN (
                 SELECT user_id FROM steps WHERE day = ?
             )
         """, (day,))
         return cur.fetchall()
-
+    
 def increment_missed_streak(user_id: int):
     with get_con() as conn:
         cur = conn.cursor()
@@ -123,12 +124,35 @@ def reset_missed_streak(user_id: int):
         """, (user_id,))
         conn.commit()
 
-def disable_notifications(user_id: int):
+
+def enable_reminder(user_id: int):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            UPDATE users
-            SET notifications_enabled = 0
-            WHERE id = ?
+            UPDATE users SET reminder_enabled = 1 WHERE id = ?
+        """, (user_id,))
+        conn.commit()
+
+def disable_reminder(user_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE users SET reminder_enabled = 0 WHERE id = ?
+        """, (user_id,))
+        conn.commit()
+
+def enable_stats(user_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE users SET stats_enabled = 1 WHERE id = ?
+        """, (user_id,))
+        conn.commit()
+
+def disable_stats(user_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE users SET stats_enabled = 0 WHERE id = ?
         """, (user_id,))
         conn.commit()
