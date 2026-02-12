@@ -82,6 +82,8 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if await handle_stats_menu(update, context, text):
         return
+    if await handle_notifications(update, context, text):
+        return
     if await handle_state(update, context, text):
         return
     if await handle_actions(update, context, text):
@@ -169,6 +171,37 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
 
     return False
+
+async def handle_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    user = update.effective_user
+    settings = database.get_user_settings(user.id)
+    if settings is None:
+        return False
+
+    reminder_enabled, stats_enabled = settings
+
+    if text == "Выкл напоминание":
+        database.disable_reminder(database.get_user_id(user.id))
+        await update.message.reply_text("Напоминания отключены.", reply_markup=MENU_KEYBOARD)
+        return True
+
+    if text == "Вкл напоминание":
+        database.enable_reminder(database.get_user_id(user.id))
+        await update.message.reply_text("Напоминания включены.", reply_markup=MENU_KEYBOARD)
+        return True
+
+    if text == "Выкл статистику":
+        database.disable_stats(database.get_user_id(user.id))
+        await update.message.reply_text("Статистика отключена.", reply_markup=MENU_KEYBOARD)
+        return True
+
+    if text == "Вкл статистику":
+        database.enable_stats(database.get_user_id(user.id))
+        await update.message.reply_text("Статистика включена.", reply_markup=MENU_KEYBOARD)
+        return True
+
+    return False
+
 
 
 async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
