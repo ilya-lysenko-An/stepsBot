@@ -39,6 +39,12 @@ STATS_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+NOTIFY_KEYBOARD = ReplyKeyboardMarkup(
+    [["Выкл напоминание", "Выкл статистику"]],
+    resize_keyboard=True
+)
+
+
 def parse_ddmm(text: str):
     parts = text.split(".")
     if len(parts) != 2:
@@ -65,11 +71,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Тут будет текст правил…")
     await update.message.reply_text("Нажми кнопку для участия", reply_markup=JOIN_KEYBOARD)
 
-
-
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
+    if await handle_join_flow(update, context, text):
+        return
+    if await handle_navigation(update, context, text):
+        return
+    if await handle_stats_menu(update, context, text):
+        return
+    if await handle_state(update, context, text):
+        return
+    if await handle_actions(update, context, text):
+        return
+
+async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "УЧАСТВУЮ":
         user = update.effective_user
         database.add_user(
@@ -80,80 +96,9 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data["state"] = "awaiting_club"
         await update.message.reply_text("Напиши свой клуб, если клуба нет пиши 'нет'.")
-        return
+        return True
 
     state = context.user_data.get("state")
-
-    if text == "Меню":
-        context.user_data["menu"] = "menu"
-        await update.message.reply_text("Меню:", reply_markup=MENU_KEYBOARD)
-        return
-
-    if text == "Назад":
-        current = context.user_data.get("menu", "main")
-        if current == "stats":
-            context.user_data["menu"] = "menu"
-            await update.message.reply_text("Меню:", reply_markup=MENU_KEYBOARD)
-        else:
-            context.user_data["menu"] = "main"
-            await update.message.reply_text("Выбери действие", reply_markup=MAIN_KEYBOARD)
-        return
-
-    if text == "Уведомления":
-        await update.message.reply_text("Раздел уведомлений в разработке.")
-        return
-
-    if text == "Статистика":
-        context.user_data["menu"] = "stats"
-        await update.message.reply_text("Статистика:", reply_markup=STATS_KEYBOARD)
-        return
-
-    if text == "Топ 30 all time":
-        await update.message.reply_text("Раздел в разработке.")
-        return
-
-    if text == "Топ 10 вчера":
-        await update.message.reply_text("Раздел в разработке.")
-        return
-
-    if text == "Моя активность":
-        await update.message.reply_text("Раздел в разработке.")
-        return
-
-    if text == "Отставание от лидера":
-        await update.message.reply_text("Раздел в разработке.")
-        return
-
-    if text == "Место в топе":
-        await update.message.reply_text("Раздел в разработке.")
-        return
-
-    if state == "awaiting_steps_today":
-        if not text.isdigit():
-            await update.message.reply_text("Слова не понимаю, напиши число.")
-            return
-        
-        steps = int(text)
-        user = update.effective_user
-        user_id = database.get_user_id(user.id)
-        if user_id is None:
-            database.add_user(
-                tg_id=user.id,
-                username=user.username,
-                first_name=user.first_name,
-                club=None
-            )
-            user_id = database.get_user_id(user.id)
-        
-        today = datetime.date.today().isoformat()
-        database.upsert_steps(user_id=user_id, day=today, steps=steps)
-        database.reset_missed_streak(user_id=user_id)
-        logger.info(f"Шаги сохранены: user_id={user_id}, day={today}, steps={steps}")
-
-        context.user_data["state"] = None
-        await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
-        return
-    
     if state == "awaiting_club":
         club_text = text.strip()
         club = None if club_text.lower() == "нет" else club_text
@@ -168,29 +113,109 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 club=club
             )
         else:
-            database.update_user_club(user_id=user_id, club=club)  # нужна функция
+            database.update_user_club(user_id=user_id, club=club)
 
         context.user_data["state"] = None
         await update.message.reply_text("Готово! Теперь можно ввести шаги.", reply_markup=MAIN_KEYBOARD)
-        return
+        return True
 
-    
+    return False
+
+async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    if text == "Меню":
+        context.user_data["menu"] = "menu"
+        await update.message.reply_text("Меню:", reply_markup=MENU_KEYBOARD)
+        return True
+
+    if text == "Назад":
+        current = context.user_data.get("menu", "main")
+        if current == "stats":
+            context.user_data["menu"] = "menu"
+            await update.message.reply_text("Меню:", reply_markup=MENU_KEYBOARD)
+        else:
+            context.user_data["menu"] = "main"
+            await update.message.reply_text("Выбери действие", reply_markup=MAIN_KEYBOARD)
+        return True
+
+    if text == "Уведомления":
+        await update.message.reply_text("Раздел уведомлений в разработке.")
+        return True
+
+    if text == "Статистика":
+        context.user_data["menu"] = "stats"
+        await update.message.reply_text("Статистика:", reply_markup=STATS_KEYBOARD)
+        return True
+
+    return False
+
+async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    if text == "Топ 30 all time":
+        await update.message.reply_text("Раздел в разработке.")
+        return True
+
+    if text == "Топ 10 вчера":
+        await update.message.reply_text("Раздел в разработке.")
+        return True
+
+    if text == "Моя активность":
+        await update.message.reply_text("Раздел в разработке.")
+        return True
+
+    if text == "Отставание от лидера":
+        await update.message.reply_text("Раздел в разработке.")
+        return True
+
+    if text == "Место в топе":
+        await update.message.reply_text("Раздел в разработке.")
+        return True
+
+    return False
+
+async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    state = context.user_data.get("state")
+
+    if state == "awaiting_steps_today":
+        if not text.isdigit():
+            await update.message.reply_text("Слова не понимаю, напиши число.")
+            return True
+
+        steps = int(text)
+        user = update.effective_user
+        user_id = database.get_user_id(user.id)
+        if user_id is None:
+            database.add_user(
+                tg_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                club=None
+            )
+            user_id = database.get_user_id(user.id)
+
+        today = datetime.date.today().isoformat()
+        database.upsert_steps(user_id=user_id, day=today, steps=steps)
+        database.reset_missed_streak(user_id=user_id)
+        logger.info(f"Шаги сохранены: user_id={user_id}, day={today}, steps={steps}")
+
+        context.user_data["state"] = None
+        await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
+        return True
+
     if state == "awaiting_edit_date":
         day_iso = parse_ddmm(text)
         if not day_iso:
             await update.message.reply_text("Неверный формат. Пример: 05.02")
-            return
-        
+            return True
+
         context.user_data["edit_date"] = day_iso
         context.user_data["state"] = "awaiting_edit_steps"
         await update.message.reply_text("Теперь введи количество шагов за эту дату.")
-        return
-    
+        return True
+
     if state == "awaiting_edit_steps":
         if not text.isdigit():
             await update.message.reply_text("Введи число.")
-            return
-        
+            return True
+
         steps = int(text)
         day = context.user_data.get("edit_date")
 
@@ -211,17 +236,23 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = None
         context.user_data["edit_date"] = None
         await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
-        return
+        return True
 
+    return False
+
+async def handle_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "Ввести шаги":
         context.user_data["state"] = "awaiting_steps_today"
         await update.message.reply_text("Введи количество шагов за сегодня.")
-        return
+        return True
 
     if text == "Редактировать шаги":
         context.user_data["state"] = "awaiting_edit_date"
         await update.message.reply_text("Введи дату в формате ДД.ММ.")
-        return
+        return True
+
+    return False
+
     
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     tz = ZoneInfo("Europe/Moscow")
