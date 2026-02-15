@@ -9,6 +9,8 @@ import os
 from dotenv import load_dotenv 
 from zoneinfo import ZoneInfo
 from datetime import timedelta
+from telegram import ReplyKeyboardRemove
+
 
 load_dotenv("token.env")
 TOKEN = os.getenv("BOT_TOKEN")
@@ -69,8 +71,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["menu"] = "main"
     context.user_data["state"] = None
 
-    await update.message.reply_text("Тут будет текст правил…")
-    await update.message.reply_text("Нажми кнопку для участия", reply_markup=JOIN_KEYBOARD)
+    await update.message.reply_text("Тут будет текст правил…", reply_markup=JOIN_KEYBOARD)
 
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,7 +110,10 @@ async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             club=None
         )
         context.user_data["state"] = "awaiting_club"
-        await update.message.reply_text("Напиши свой клуб, если клуба нет пиши 'нет'.")
+        await update.message.reply_text(
+            "Напиши свой клуб, если клуба нет пиши 'нет'.",
+            reply_markup=ReplyKeyboardRemove()
+            )
         return True
 
     state = context.user_data.get("state")
