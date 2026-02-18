@@ -71,7 +71,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["menu"] = "main"
     context.user_data["state"] = None
 
-    await update.message.reply_text("Тут будет текст правил…", reply_markup=JOIN_KEYBOARD)
+    with open("welcome.jpg", "rb") as photo:
+        await update.message.reply_photo(
+            photo = photo,
+            caption = "Макс привет",
+            reply_markup=JOIN_KEYBOARD
+        )
 
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
