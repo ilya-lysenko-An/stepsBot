@@ -18,6 +18,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tg_id INTEGER UNIQUE NOT NULL,
                 username TEXT,
+                first_name TEXT,
                 club TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 notifications_enabled INTEGER NOT NULL DEFAULT 1
@@ -48,13 +49,13 @@ def init_db():
 
 # ---------- users ----------
 
-def add_user(tg_id: int, username: str = None, club: str = None):
+def add_user(tg_id: int, username: str = None, first_name: str = None, club: str = None):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            INSERT OR IGNORE INTO users (tg_id, username, club)
-            VALUES (?, ?, ?)
-        """, (tg_id, username, club))
+            INSERT OR IGNORE INTO users (tg_id, username, first_name, club)
+            VALUES (?, ?, ?, ?)
+        """, (tg_id, username, first_name, club))
         conn.commit()
 
 
@@ -104,7 +105,7 @@ def get_active_users():
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, tg_id, username, club, notifications_enabled
+            SELECT id, tg_id, username, first_name, club, notifications_enabled
             FROM users
             WHERE is_active = 1
         """)
