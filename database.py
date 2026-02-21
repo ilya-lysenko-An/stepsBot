@@ -2,44 +2,59 @@ import sqlite3
 
 DB_PATH = "steps.db"
 
+
 def get_con():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
 
 def init_db():
     with get_con() as conn:
         cur = conn.cursor()
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tg_id INTEGER UNIQUE NOT NULL,
                 username TEXT,
-                first_name TEXT,
                 club TEXT,
-                reminder_enabled INTEGER DEFAULT 1,
-                stats_enabled INTEGER DEFAULT 1,
-                missed_streak INTEGER DEFAULT 0
+                is_active INTEGER NOT NULL DEFAULT 1,
+                notifications_enabled INTEGER NOT NULL DEFAULT 1
             );
         """)
+
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS steps (
+            CREATE TABLE IF NOT EXISTS daily_status (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                day TEXT NOT NULL,
-                steps INTEGER NOT NULL,
-                UNIQUE(user_id, day),
-                FOREIGN KEY(user_id) REFERENCES users(id)
+                day_msk TEXT NOT NULL,                     -- YYYY-MM-DD
+                steps_value INTEGER NOT NULL DEFAULT 0,
+                submitted_on_time INTEGER NOT NULL DEFAULT 0, -- 0/1
+                result TEXT NOT NULL CHECK (result IN ('+', '-')),
+                result_reason TEXT NOT NULL CHECK (
+                    result_reason IN ('ok', 'late', 'lt_10k', 'no_submission')
+                ),
+                UNIQUE(user_id, day_msk),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
         """)
+
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_status_day ON daily_status(day_msk);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_status_user_day ON daily_status(user_id, day_msk);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_status_result ON daily_status(result);")
         conn.commit()
 
 
-def add_user(tg_id: int, username: str, first_name: str, club: str = None):
+# ---------- users ----------
+
+def add_user(tg_id: int, username: str = None, club: str = None):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            INSERT OR IGNORE INTO users (tg_id, username, first_name, club)
-            VALUES (?, ?, ?, ?)
-        """, (tg_id, username, first_name, club))
+            INSERT OR IGNORE INTO users (tg_id, username, club)
+            VALUES (?, ?, ?)
+        """, (tg_id, username, club))
         conn.commit()
 
 
@@ -49,17 +64,6 @@ def get_user_id(tg_id: int):
         cur.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,))
         row = cur.fetchone()
         return row[0] if row else None
-
-
-def get_user_settings(tg_id: int):
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT reminder_enabled, stats_enabled
-            FROM users
-            WHERE tg_id = ?
-        """, (tg_id,))
-        return cur.fetchone()
 
 
 def update_user_club(user_id: int, club: str):
@@ -73,109 +77,144 @@ def update_user_club(user_id: int, club: str):
         conn.commit()
 
 
-def upsert_steps(user_id: int, day: str, steps: int):
+def set_notifications_enabled(user_id: int, enabled: int):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO steps (user_id, day, steps)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id, day)
-            DO UPDATE SET steps = excluded.steps
-        """, (user_id, day, steps))
+            UPDATE users
+            SET notifications_enabled = ?
+            WHERE id = ?
+        """, (1 if enabled else 0, user_id))
         conn.commit()
 
 
-def get_top10_for_day(day: str):
+def get_user_settings(tg_id: int):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT u.first_name, u.username, s.steps
-            FROM steps s
-            JOIN users u ON s.user_id = u.id
-            WHERE s.day = ?
-            ORDER BY s.steps DESC
-            LIMIT 10
-        """, (day,))
-        return cur.fetchall()
-
-
-def get_participants():
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT id, tg_id, reminder_enabled, stats_enabled, missed_streak
+            SELECT notifications_enabled
             FROM users
+            WHERE tg_id = ?
+        """, (tg_id,))
+        row = cur.fetchone()
+        return row  # (notifications_enabled,) or None
+
+
+def get_active_users():
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, tg_id, username, club, notifications_enabled
+            FROM users
+            WHERE is_active = 1
         """)
         return cur.fetchall()
 
 
-def get_users_missing_day(day: str):
+# ---------- daily status ----------
+
+def get_daily_status(user_id: int, day_msk: str):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT u.id, u.tg_id, u.missed_streak
-            FROM users u
-            WHERE u.reminder_enabled = 1
-            AND u.id NOT IN (
-                SELECT user_id FROM steps WHERE day = ?
+            SELECT id, user_id, day_msk, steps_value, submitted_on_time, result, result_reason
+            FROM daily_status
+            WHERE user_id = ? AND day_msk = ?
+        """, (user_id, day_msk))
+        return cur.fetchone()
+
+
+def upsert_daily_status(
+    user_id: int,
+    day_msk: str,
+    steps_value: int,
+    submitted_on_time: int,
+    result: str,
+    result_reason: str
+):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO daily_status (
+                user_id, day_msk, steps_value, submitted_on_time, result, result_reason
             )
-        """, (day,))
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, day_msk)
+            DO UPDATE SET
+                steps_value = excluded.steps_value,
+                submitted_on_time = excluded.submitted_on_time,
+                result = excluded.result,
+                result_reason = excluded.result_reason
+        """, (user_id, day_msk, steps_value, 1 if submitted_on_time else 0, result, result_reason))
+        conn.commit()
+
+
+def finalize_no_submission_for_day(day_msk: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO daily_status (
+                user_id, day_msk, steps_value, submitted_on_time, result, result_reason
+            )
+            SELECT
+                u.id, ?, 0, 0, '-', 'no_submission'
+            FROM users u
+            WHERE u.is_active = 1
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM daily_status d
+                  WHERE d.user_id = u.id AND d.day_msk = ?
+              )
+        """, (day_msk, day_msk))
+        conn.commit()
+
+
+def list_user_daily_results(user_id: int, date_from: str, date_to: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT day_msk, steps_value, submitted_on_time, result, result_reason
+            FROM daily_status
+            WHERE user_id = ?
+              AND day_msk BETWEEN ? AND ?
+            ORDER BY day_msk
+        """, (user_id, date_from, date_to))
         return cur.fetchall()
-    
 
-def increment_missed_streak(user_id: int):
+
+def get_user_penalty_count(user_id: int, date_from: str, date_to: str):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            UPDATE users
-            SET missed_streak = missed_streak + 1
-            WHERE id = ?
-        """, (user_id,))
-        conn.commit()
+            SELECT COUNT(*)
+            FROM daily_status
+            WHERE user_id = ?
+              AND day_msk BETWEEN ? AND ?
+              AND result = '-'
+        """, (user_id, date_from, date_to))
+        return cur.fetchone()[0]
 
 
-def reset_missed_streak(user_id: int):
+def get_fund_stats(date_from: str, date_to: str):
     with get_con() as conn:
         cur = conn.cursor()
+
         cur.execute("""
-            UPDATE users
-            SET missed_streak = 0
-            WHERE id = ?
-        """, (user_id,))
-        conn.commit()
+            SELECT COUNT(*)
+            FROM daily_status
+            WHERE day_msk BETWEEN ? AND ?
+              AND result = '-'
+        """, (date_from, date_to))
+        total_penalties = cur.fetchone()[0]
 
-
-def enable_reminder(user_id: int):
-    with get_con() as conn:
-        cur = conn.cursor()
         cur.execute("""
-            UPDATE users SET reminder_enabled = 1 WHERE id = ?
-        """, (user_id,))
-        conn.commit()
+            SELECT result_reason, COUNT(*)
+            FROM daily_status
+            WHERE day_msk BETWEEN ? AND ?
+              AND result = '-'
+            GROUP BY result_reason
+        """, (date_from, date_to))
+        by_reason = cur.fetchall()
 
+        return total_penalties, by_reason
 
-def disable_reminder(user_id: int):
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE users SET reminder_enabled = 0 WHERE id = ?
-        """, (user_id,))
-        conn.commit()
-
-
-def enable_stats(user_id: int):
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE users SET stats_enabled = 1 WHERE id = ?
-        """, (user_id,))
-        conn.commit()
-
-
-def disable_stats(user_id: int):
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE users SET stats_enabled = 0 WHERE id = ?
-        """, (user_id,))
-        conn.commit()
