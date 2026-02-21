@@ -264,22 +264,37 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         user = update.effective_user
         user_id = database.get_user_id(user.id)
         if user_id is None:
-            database.add_user(
-                tg_id=user.id,
-                username=user.username,
-                first_name=user.first_name,
-                club=None
-            )
-            user_id = database.get_user_id(user.id)
+            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
+            return True
 
-        today = datetime.date.today().isoformat()
-        database.upsert_steps(user_id=user_id, day=today, steps=steps)
-        database.reset_missed_streak(user_id=user_id)
-        logger.info(f"Шаги сохранены: user_id={user_id}, day={today}, steps={steps}")
+        day = today_msk()
+        if not is_within_challenge(day):
+            await update.message.reply_text("Этот день вне периода челленджа.")
+            return True
 
+        day_str = day.isoformat()
+        current = database.get_daily_status(user_id, day_str)
+
+        submitted_on_time = 1 if now_msk().time() <= time(23, 59, 59) else 0
+        if current is not None:
+            submitted_on_time = current[4]  # не ломаем раннюю метку вовремя/невовремя
+
+        result, reason = evaluate_result(submitted_on_time, steps)
+
+        database.upsert_daily_status(
+            user_id=user_id,
+            day_msk=day_str,
+            steps_value=steps,
+            submitted_on_time=submitted_on_time,
+            result=result,
+            result_reason=reason
+        )
+
+        logger.info(f"Шаги сохранены: user_id={user_id}, day={day_str}, steps={steps}, result={result}, reason={reason}")
         context.user_data["state"] = None
-        await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("Записал.", reply_markup=MAIN_KEYBOARD)
         return True
+
 
     if state == "awaiting_edit_date":
         day_iso = parse_ddmm(text)
@@ -298,28 +313,48 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
             return True
 
         steps = int(text)
-        day = context.user_data.get("edit_date")
+        day_str = context.user_data.get("edit_date")
+        if not day_str:
+            await update.message.reply_text("Сначала выбери дату.")
+            return True
+
+        day = datetime.date.fromisoformat(day_str)
+        if not is_within_challenge(day):
+            await update.message.reply_text("Эта дата вне периода челленджа.")
+            return True
 
         user = update.effective_user
         user_id = database.get_user_id(user.id)
         if user_id is None:
-            database.add_user(
-                tg_id=user.id,
-                username=user.username,
-                first_name=user.first_name,
-                club=None
-            )
-            user_id = database.get_user_id(user.id)
+            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
+            return True
 
-        database.upsert_steps(user_id=user_id, day=day, steps=steps)
-        logger.info(f"Шаги сохранены (редакт): user_id={user_id}, day={day}, steps={steps}")
+        current = database.get_daily_status(user_id, day_str)
 
+        if current is None:
+            submitted_on_time = 1 if (day == today_msk() and now_msk().time() <= time(23, 59, 59)) else 0
+        else:
+            submitted_on_time = current[4]
+
+        result, reason = evaluate_result(submitted_on_time, steps)
+
+        database.upsert_daily_status(
+            user_id=user_id,
+            day_msk=day_str,
+            steps_value=steps,
+            submitted_on_time=submitted_on_time,
+            result=result,
+            result_reason=reason
+        )
+
+        logger.info(f"Шаги сохранены (редакт): user_id={user_id}, day={day_str}, steps={steps}, result={result}, reason={reason}")
         context.user_data["state"] = None
         context.user_data["edit_date"] = None
         await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
         return True
-
+    
     return False
+
 
 
 async def handle_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
