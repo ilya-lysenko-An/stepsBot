@@ -123,17 +123,16 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-def build_notify_keyboard(reminder_enabled: int, stats_enabled: int):
-    reminder_btn = "Выкл напоминание" if reminder_enabled else "Вкл напоминание"
-    stats_btn = "Выкл статистику" if stats_enabled else "Вкл статистику"
-    return ReplyKeyboardMarkup(
-        [[reminder_btn, stats_btn]],
-        resize_keyboard=True
-    )
+def build_notify_keyboard(notifications_enabled: int):
+    btn = "Выкл уведомления" if notifications_enabled else "Вкл уведомления"
+    return ReplyKeyboardMarkup([[btn]], resize_keyboard=True)
 
 
 async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "УЧАСТВУЮ":
+        if today_msk() != CHALLENGE_START_DATE_MSK:
+            await update.message.reply_text("Вступление доступно только в день старта челленджа.")
+            return True
         user = update.effective_user
         database.add_user(
             tg_id=user.id,
@@ -195,8 +194,8 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».", reply_markup=MENU_KEYBOARD)
             return True
 
-        reminder_enabled, stats_enabled = settings
-        kb = build_notify_keyboard(reminder_enabled, stats_enabled)
+        (notifications_enabled,) = settings
+        kb = build_notify_keyboard(notifications_enabled)
         await update.message.reply_text("Уведомления:", reply_markup=kb)
         return True
 
@@ -210,33 +209,22 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 async def handle_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     user = update.effective_user
-    settings = database.get_user_settings(user.id)
-    if settings is None:
+    user_id = database.get_user_id(user.id)
+    if user_id is None:
         return False
 
-    reminder_enabled, stats_enabled = settings
-
-    if text == "Выкл напоминание":
-        database.disable_reminder(database.get_user_id(user.id))
-        await update.message.reply_text("Напоминания отключены.", reply_markup=MENU_KEYBOARD)
+    if text == "Выкл уведомления":
+        database.set_notifications_enabled(user_id, 0)
+        await update.message.reply_text("Уведомления отключены.", reply_markup=MENU_KEYBOARD)
         return True
 
-    if text == "Вкл напоминание":
-        database.enable_reminder(database.get_user_id(user.id))
-        await update.message.reply_text("Напоминания включены.", reply_markup=MENU_KEYBOARD)
-        return True
-
-    if text == "Выкл статистику":
-        database.disable_stats(database.get_user_id(user.id))
-        await update.message.reply_text("Статистика отключена.", reply_markup=MENU_KEYBOARD)
-        return True
-
-    if text == "Вкл статистику":
-        database.enable_stats(database.get_user_id(user.id))
-        await update.message.reply_text("Статистика включена.", reply_markup=MENU_KEYBOARD)
+    if text == "Вкл уведомления":
+        database.set_notifications_enabled(user_id, 1)
+        await update.message.reply_text("Уведомления включены.", reply_markup=MENU_KEYBOARD)
         return True
 
     return False
+
 
 
 
