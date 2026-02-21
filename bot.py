@@ -76,6 +76,23 @@ def parse_ddmm(text: str):
     
     return dt.isoformat()
 
+def now_msk() -> datetime.datetime:
+    return datetime.datetime.now(MSK)
+
+def today_msk() -> datetime.date:
+    return now_msk().date()
+
+def is_within_challenge(day: datetime.date) -> bool:
+    return CHALLENGE_START_DATE_MSK <= day <= CHALLENGE_END_DATE_MSK
+
+def evaluate_result(submitted_on_time: int, steps_value: int) -> tuple[str, str]:
+    if submitted_on_time == 0:
+        return "-", "late"
+    if steps_value < DAILY_TARGET:
+        return "-", "lt_10k"
+    return "+", "ok"
+
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["menu"] = "main"
