@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from datetime import timedelta
 from telegram import ReplyKeyboardRemove
+from datetime import time
+
 
 
 load_dotenv("token.env")
@@ -17,6 +19,14 @@ TOKEN = os.getenv("BOT_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+MSK = ZoneInfo("Europe/Moscow")
+
+CHALLENGE_START_DATE_MSK = datetime.date(2026, 2, 20)   # поправить
+CHALLENGE_END_DATE_MSK = datetime.date(2026, 3, 20)     # поправить
+DAILY_TARGET = 10_000
+DAILY_PENALTY_RUB = 100
+
 
 JOIN_KEYBOARD = ReplyKeyboardMarkup(
     [["УЧАСТВУЮ"]],
