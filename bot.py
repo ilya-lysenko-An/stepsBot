@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 MSK = ZoneInfo("Europe/Moscow")
 
-CHALLENGE_START_DATE_MSK = datetime.date(2026, 2, 20)   # поправить
-CHALLENGE_END_DATE_MSK = datetime.date(2026, 3, 20)     # поправить
+CHALLENGE_START_DATE_MSK = datetime.date(2026, 2, 23)   # поправить
+CHALLENGE_END_DATE_MSK = datetime.date(2026, 2, 28)     # поправить
 DAILY_TARGET = 10_000
 DAILY_PENALTY_RUB = 100
 
@@ -95,7 +95,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open("welcome.jpg", "rb") as photo:
         await update.message.reply_photo(
             photo = photo,
-            caption = "Макс привет",
+            caption = '''Всем ку! Бот пока очень карявый, 
+            но почти доработанный. Короче закидывайте свои шаги тыкайте кнопки 
+            и в случае ошибок пишите мне.''',
             reply_markup=JOIN_KEYBOARD
         )
 
