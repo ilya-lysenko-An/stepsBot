@@ -7,7 +7,7 @@ from telegram.ext import MessageHandler, filters
 import database
 import os 
 from dotenv import load_dotenv 
-from zoneinfo import ZoneInfo
+import pytz
 from telegram import ReplyKeyboardRemove
 from datetime import time
 
@@ -19,7 +19,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MSK = ZoneInfo("Europe/Moscow")
+MSK = pytz.timezone("Europe/Moscow")
 
 CHALLENGE_START_DATE_MSK = datetime.date(2026, 2, 23)   # поправить
 CHALLENGE_END_DATE_MSK = datetime.date(2026, 2, 28)     # поправить
