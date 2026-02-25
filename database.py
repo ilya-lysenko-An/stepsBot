@@ -30,7 +30,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 day_msk TEXT NOT NULL,                     -- YYYY-MM-DD
-                steps_value INTEGER NOT NULL DEFAULT 0,
+                steps_value INTEGER NOT NULL DEFAULT 0 CHECK (steps_value >= 0 AND steps_value <= 100000),
                 submitted_on_time INTEGER NOT NULL DEFAULT 0, -- 0/1
                 result TEXT NOT NULL CHECK (result IN ('+', '-')),
                 result_reason TEXT NOT NULL CHECK (

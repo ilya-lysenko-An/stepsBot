@@ -275,6 +275,9 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
             return True
 
         steps = int(text)
+        if steps < 0 or steps > 100000:
+            await update.message.reply_text("Ты че то много написал, сбавь обороты")
+            return True
         user = update.effective_user
         user_id = database.get_user_id(user.id)
         if user_id is None:
@@ -329,6 +332,9 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
             return True
 
         steps = int(text)
+        if steps < 0 or steps > 100000:
+            await update.message.reply_text("Ты че то много написал, сбавь обороты")
+            return True
         day_str = context.user_data.get("edit_date")
         if not day_str:
             await update.message.reply_text("Сначала выбери дату.")
