@@ -260,8 +260,24 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
 
     if text == "Моя активность":
-        await update.message.reply_text("Раздел в разработке.")
+        user = update.effective_user
+        user_id = database.get_user_id(user.id)
+        if user_id is None:
+            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
+            return True
+        
+        total_steps, minus_count, avg_steps = database.get_user_activity_stats(user_id)
+        penalty_sum = minus_count * DAILY_PENALTY_RUB
+
+        msg = (
+            f"Моя активность:\n"
+            f"1) Общее число шагов: {total_steps}\n"
+            f"2) Среднее количество шагов: {avg_steps}\n"
+            f"3) Сумма штрафа: {penalty_sum} ₽"
+        )
+        await update.message.reply_text(msg)
         return True
+        
 
     if text == "Отставание от лидера":
         await update.message.reply_text("Раздел в разработке.")

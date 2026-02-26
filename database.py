@@ -219,3 +219,32 @@ def get_fund_stats(date_from: str, date_to: str):
 
         return total_penalties, by_reason
 
+def get_user_activity_stats(user_id: int, date_from: str = None, date_to: str = None):
+    with get_con() as conn:
+        cur = conn.cursor()
+
+        if date_from and date_to:
+            cur.execute("""
+                SELECT
+                    COALESCE(SUM(steps_value), 0) AS total_steps,
+                    COALESCE(SUM(CASE WHEN result = '-' THEN 1 ELSE 0 END), 0) AS minus_count,
+                    COALESCE(AVG(steps_value), 0) AS avg_steps
+                FROM daily_status
+                WHERE user_id = ?
+                  AND day_msk BETWEEN ? AND ?
+            """, (user_id, date_from, date_to))
+        else:
+            cur.execute("""
+                SELECT
+                    COALESCE(SUM(steps_value), 0) AS total_steps,
+                    COALESCE(SUM(CASE WHEN result = '-' THEN 1 ELSE 0 END), 0) AS minus_count,
+                    COALESCE(AVG(steps_value), 0) AS avg_steps
+                FROM daily_status
+                WHERE user_id = ?
+            """, (user_id,))
+
+        row = cur.fetchone()
+        total_steps = int(row[0] or 0)
+        minus_count = int(row[1] or 0)
+        avg_steps = int(row[2] or 0)
+        return total_steps, minus_count, avg_steps
