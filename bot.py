@@ -280,7 +280,29 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         
 
     if text == "Отставание от лидера":
-        await update.message.reply_text("Раздел в разработке.")
+        user = update.effective_user
+        user_id = database.get_user_id(user.id)
+        if user_id is None:
+            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ»." )
+            return True
+        
+        leader, user_total = database.get_leader_and_user_total(user_id)
+        if leader is None:
+            await update.message.reply_text("Лидера пока нет, стань первым")
+            return True
+        
+        leader_user_id, leader_total = leader
+        leader_total = int(leader_total or 0)
+
+        if user_id == leader_user_id:
+            await update.message.reply_text("Вы и есть лидер! Сможете удержать этот титул ?)")
+            return True
+        
+        lag = leader_total - user_id
+        await update.message.reply_text(
+            f"Ваше отстование от лидера: {lag} шагов\n"
+            f"У лидера всего: {leader_total}, у вас: {user_total}"
+        )
         return True
 
     if text == "Место в топе":

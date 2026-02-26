@@ -248,3 +248,26 @@ def get_user_activity_stats(user_id: int, date_from: str = None, date_to: str = 
         minus_count = int(row[1] or 0)
         avg_steps = int(row[2] or 0)
         return total_steps, minus_count, avg_steps
+    
+def get_leader_and_user_total(user_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT user_id, SUM(steps_value) AS total_steps
+            FROM daily_status
+            GROUP BY user_id
+            ORDER BY total_steps DESC
+            LIMIT 1
+        """)
+        leader = cur.fetchone()  
+
+        cur.execute("""
+            SELECT COALESCE(SUM(steps_value), 0)
+            FROM daily_status
+            WHERE user_id = ?
+        """, (user_id,))
+        user_total = cur.fetchone()[0] or 0
+
+        return leader, int(user_total)
+
