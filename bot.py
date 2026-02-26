@@ -15,8 +15,16 @@ import database
 load_dotenv("token.env")
 TOKEN = os.getenv("BOT_TOKEN")
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level = logging.ERROR,
+    format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("telegram").setLevel(logging.ERROR)
+logging.getLogger("apscheduler").setLevel(logging.ERROR)
 
 MSK = ZoneInfo("Europe/Moscow")
 
