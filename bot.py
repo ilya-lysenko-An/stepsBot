@@ -6,7 +6,7 @@ from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.error import TimedOut, NetworkError
 from dotenv import load_dotenv
-import pytz
+from zoneinfo import ZoneInfo
 import os
 
 import database
@@ -18,7 +18,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MSK = pytz.timezone("Europe/Moscow")
+MSK = ZoneInfo("Europe/Moscow")
 
 CHALLENGE_START_DATE_MSK = datetime.date(2026, 2, 23)   # поправить при необходимости
 CHALLENGE_END_DATE_MSK = datetime.date(2026, 2, 28)     # поправить при необходимости
@@ -137,11 +137,11 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if await handle_notifications(update, context, text):
             return
-        if await handle_state(update, context, text):
+        if await handle_actions(update, context, text):
             return
         if await handle_stats_menu(update, context, text):
             return
-        if await handle_actions(update, context, text):
+        if await handle_state(update, context, text):
             return
     except (TimedOut, NetworkError) as e:
         logger.warning("handle_menu timeout/network error: %s", e)
@@ -278,6 +278,7 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         if steps < 0 or steps > 100000:
             await update.message.reply_text("Ты че то много написал, сбавь обороты")
             return True
+
         user = update.effective_user
         user_id = database.get_user_id(user.id)
         if user_id is None:
@@ -335,6 +336,7 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         if steps < 0 or steps > 100000:
             await update.message.reply_text("Ты че то много написал, сбавь обороты")
             return True
+
         day_str = context.user_data.get("edit_date")
         if not day_str:
             await update.message.reply_text("Сначала выбери дату.")
@@ -383,11 +385,13 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
 
 async def handle_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "Ввести шаги":
+        context.user_data["edit_date"] = None
         context.user_data["state"] = "awaiting_steps_today"
         await update.message.reply_text("Введи количество шагов за сегодня.")
         return True
 
     if text == "Редактировать шаги":
+        context.user_data["edit_date"] = None
         context.user_data["state"] = "awaiting_edit_date"
         await update.message.reply_text("Введи дату в формате ДД.ММ.")
         return True
