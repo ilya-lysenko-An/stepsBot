@@ -298,7 +298,7 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await update.message.reply_text("Вы и есть лидер! Сможете удержать этот титул ?)")
             return True
         
-        lag = leader_total - user_id
+        lag = leader_total - user_total
         await update.message.reply_text(
             f"Ваше отстование от лидера: {lag} шагов\n"
             f"У лидера всего: {leader_total}, у вас: {user_total}"
