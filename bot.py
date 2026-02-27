@@ -119,10 +119,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open("welcome.jpg", "rb") as photo:
             await update.message.reply_photo(
                 photo=photo,
-                caption=(
-                    "Всем ку! Бот пока очень карявый, "
-                    "но почти доработанный. Короче закидывайте свои шаги, тыкайте кнопки "
-                    "и в случае ошибок пишите мне."
+                caption=('''Добро пожаловать в Bigagram Steps Challenge.
+                            Вот всё, что нужно знать о том, куда ТЫЫЫЫ попал(а).
+                            Располагайся и слушай.
+
+                           Это челлендж для людей, которые:
+                           — много ходят
+                           — иногда бегают
+                           — и считают шаги важнее смысла жизни
+
+                           Неважно, Garmin у тебя, Apple Watch, Amazfit или телефон из «М.Видео».
+                           Здесь шаги равны. Все равны. Почти.
+
+                           Суть простая:
+                           — каждый день вносишь шаги
+                           — цель — 10 000 шагов в день
+                           — не добрал или забил — штраф 100 ₽
+
+                           Жми «УЧАСТВУЮ».
+                           Назад дороги уже почти нет. '''
                 ),
                 reply_markup=JOIN_KEYBOARD
             )
@@ -166,7 +181,15 @@ async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         )
         context.user_data["state"] = "awaiting_club"
         await update.message.reply_text(
-            "Напиши свой клуб, если клуба нет пиши 'нет'.",
+            '''Прекрасно. Ты сделал(а) осознанный выбор.
+               Теперь напиши свой клуб.
+
+               Если клуба нет — напиши «нет».
+
+               Это нужно:
+               — для статистики
+               — для будущих срачей
+               — и чтобы потом было понятно, кто откуда пришёл''',
             reply_markup=ReplyKeyboardRemove()
         )
         return True
@@ -189,7 +212,37 @@ async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             database.update_user_club(user_id=user_id, club=club)
 
         context.user_data["state"] = None
-        await update.message.reply_text("Готово! Теперь можно ввести шаги.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(
+            '''Готово. Ты официально в игре 🫡
+               Краткий инструктаж, без занудства:
+
+               🚶‍♂️ Каждый день
+               — нажимаешь «Ввести шаги»
+               — вводишь общее число шагов за день
+
+               🎯 Цель
+               — 10 000 шагов в день
+
+               💸 Штрафы
+               — меньше 10 000 → +100 ₽
+               — не внёс шаги за день → +100 ₽
+               — штраф один, но неизбежный
+
+               ⏰ Забыл?
+               — бот напомнит вечером
+               — шаги можно внести позже
+               — но штраф за пропуск дня уже никуда не денется
+
+               📊 В «Меню» найдёшь:
+               — свою статистику
+               — штрафы
+               — отставание от лидера
+
+               Всё честно. Всё считается.
+               Ходи. Считай. Страдай.
+
+               Поехали 🚀''',
+            reply_markup=MAIN_KEYBOARD)
         return True
 
     return False
@@ -462,7 +515,9 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
             await safe_send_message(
                 context.bot,
                 tg_id,
-                "Напоминание: внеси шаги за сегодня до 23:59."
+                '''Напоминание.
+                   Шаги за сегодня сами себя не внесут.
+                   До 23:59 ещё можно спастись.'''
             )
 
 
