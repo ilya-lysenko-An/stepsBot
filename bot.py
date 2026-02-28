@@ -162,9 +162,9 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if await handle_actions(update, context, text):
             return
-        if await handle_stats_menu(update, context, text):
-            return
         if await handle_state(update, context, text):
+            return
+        if await handle_stats_menu(update, context, text):
             return
     except (TimedOut, NetworkError) as e:
         logger.warning("handle_menu timeout/network error: %s", e)
@@ -273,7 +273,19 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
         (notifications_enabled,) = settings
         kb = build_notify_keyboard(notifications_enabled)
-        await update.message.reply_text("Уведомления:", reply_markup=kb)
+        await update.message.reply_text(
+            '''Уведомления. Последний шанс не облажаться.
+
+               🔔 Включить уведомления
+               Бот будет напоминать,
+               что шаги сами себя не внесут,
+               а 23:59 — это не шутка.
+
+               🔕 Выключить уведомления
+               Ты взрослый человек.
+               Сам помнишь.
+               (или платишь штрафы, как взрослый).''',
+        reply_markup=kb)
         return True
 
     if text == "Статистика":
@@ -319,14 +331,27 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
             return True
         
-        total_steps, minus_count, avg_steps = database.get_user_activity_stats(user_id)
-        penalty_sum = minus_count * DAILY_PENALTY_RUB
+        total_steps, minus_count, avg_steps = database.get_user_activity_stats(user_id) # средние шаги, всего шагов
+        penalty_sum = minus_count * DAILY_PENALTY_RUB # сумма штрафа
 
         msg = (
-            f"Моя активность:\n"
-            f"1) Общее число шагов: {total_steps}\n"
-            f"2) Среднее количество шагов: {avg_steps}\n"
-            f"3) Сумма штрафа: {penalty_sum} ₽"
+            f'''Твоя активность. Личный отчёт. Без прикрас.
+
+               🚶‍♂️ Всего натоптано:
+               {total_steps}
+               (да, это реально много)
+
+               📈 Среднее за день:
+               {avg_steps}
+               крепкий, уверенный режим, без сюрпризов
+
+               💸 Штрафы:
+               {penalty_sum} ₽
+               не идеально, но и не позорно
+
+               Вывод:
+               Ты не просто ходишь — ты системно изнашиваешь асфальт.
+               Пара осечек была, но в целом — достойно. Продолжай в том же духе.'''
         )
         await update.message.reply_text(msg)
         return True
@@ -339,9 +364,9 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await update.message.reply_text("Сначала нажми «УЧАСТВУЮ»." )
             return True
         
-        leader, user_total = database.get_leader_and_user_total(user_id)
+        leader, user_total = database.get_leader_and_user_total(user_id) #user total - шаги юзера leader - шаги лидера 
         if leader is None:
-            await update.message.reply_text("Лидера пока нет, стань первым")
+            await update.message.reply_text("Король пока не найден! Бери руки в ноги и бегом становиться первым лидером")
             return True
         
         leader_user_id, leader_total = leader
@@ -351,11 +376,25 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await update.message.reply_text("Вы и есть лидер! Сможете удержать этот титул ?)")
             return True
         
-        lag = leader_total - user_total
+        lag = leader_total - user_total # отставание от лидера 
         await update.message.reply_text(
-            f"Ваше отстование от лидера: {lag} шагов\n"
-            f"У лидера всего: {leader_total}, у вас: {user_total}"
-        )
+            f'''Отставание от лидера. Дышишь ему в затылок.
+
+               👣 Разрыв:
+               {lag}
+               это буквально одна прогулка в кофейню. 
+
+               🏁 Лидер:
+               {leader_total}
+               ходит так, будто ему за это платят. 
+
+               🚶‍♂️ Ты:
+               {user_total}
+               почти там же, не расслабляйся
+
+               Вердикт:
+               Лидер ещё впереди, но уже нервно оглядывается.
+               Пара лишних кругов — и таблички поменяются местами.''')
         return True
 
     if text == "Место в топе":
