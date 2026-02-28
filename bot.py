@@ -34,8 +34,8 @@ logging.getLogger("apscheduler").setLevel(logging.ERROR)
 
 MSK = ZoneInfo("Europe/Moscow")
 
-CHALLENGE_START_DATE_MSK = datetime.date(2026, 2, 23)   # поправить при необходимости
-CHALLENGE_END_DATE_MSK = datetime.date(2026, 2, 28)     # поправить при необходимости
+CHALLENGE_START_DATE_MSK = datetime.date(2026, 3, 1)   # поправить при необходимости
+CHALLENGE_END_DATE_MSK = datetime.date(2026, 3, 31)     # поправить при необходимости
 DAILY_TARGET = 10_000
 DAILY_PENALTY_RUB = 100
 CHANNEL_ID = "@begogram_ch"
