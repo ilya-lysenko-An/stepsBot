@@ -2,9 +2,15 @@ import logging
 import datetime
 from datetime import time
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-from telegram.error import TimedOut, NetworkError
+from telegram.error import TimedOut, NetworkError, TelegramError
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 import os
@@ -32,6 +38,8 @@ CHALLENGE_START_DATE_MSK = datetime.date(2026, 2, 23)   # поправить п�
 CHALLENGE_END_DATE_MSK = datetime.date(2026, 2, 28)     # поправить при необходимости
 DAILY_TARGET = 10_000
 DAILY_PENALTY_RUB = 100
+CHANNEL_ID = "@begogram_ch"
+CHANNEL_URL = "https://t.me/begogram_ch"
 
 
 JOIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -109,6 +117,14 @@ async def safe_send_message(bot, chat_id: int, text: str):
         await bot.send_message(chat_id=chat_id, text=text)
     except (TimedOut, NetworkError) as e:
         logger.warning("Send message timeout/network error chat_id=%s err=%s", chat_id, e)
+
+async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, tg_user_id: int) -> bool:
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_ID, tg_user_id)
+        return member.status in ("member", "administrator", "creator")
+    except TelegramError:
+        return False
+
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -190,6 +206,18 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     if text == "УЧАСТВУЮ":
         user = update.effective_user
+
+        ok = await is_subscribed(context, user.id)
+        if not ok:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Подписаться на @begogram_ch", url=CHANNEL_URL)]
+                ])
+            await update.message.reply_text(
+                "Сначала подпишись на канал, потом снова нажми «УЧАСТВУЮ».",
+                reply_markup=kb
+            )
+            return True
+
         database.add_user(
             tg_id=user.id,
             username=user.username,
