@@ -190,7 +190,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    message = update.effective_message
+    if message is None or message.text is None:
+        return
+    text = message.text
 
     try:
         if await handle_join_flow(update, context, text):
@@ -317,6 +320,8 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         kb = build_notify_keyboard(notifications_enabled)
         await update.message.reply_text(
             "Уведомления. Последний шанс не облажаться.\n\n"
+            "Оно придет вам ровно в 22:00 при условии, что вы не внесли шаги.\n"
+            "Если шаги сохранены, можете спать спокойно.\n\n"
             "🔔 Включить уведомления\n"
             "Бот будет напоминать,\n"
             "что шаги сами себя не внесут,\n"
@@ -612,7 +617,7 @@ def main():
 
     app.job_queue.run_daily(
         reminder_job,
-        time=time(hour=23, minute=0, second=0, tzinfo=MSK)
+        time=time(hour=22, minute=0, second=0, tzinfo=MSK)
     )
 
     app.job_queue.run_daily(
