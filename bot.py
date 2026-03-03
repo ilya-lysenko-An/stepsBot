@@ -34,6 +34,7 @@ logging.getLogger("apscheduler").setLevel(logging.ERROR)
 
 MSK = ZoneInfo("Europe/Moscow")
 
+REGISTRATION_DEADLINE_MSK = datetime.date(2026, 3, 3)
 CHALLENGE_START_DATE_MSK = datetime.date(2026, 3, 1)   # поправить при необходимости
 CHALLENGE_END_DATE_MSK = datetime.date(2026, 3, 31)     # поправить при необходимости
 DAILY_TARGET = 10_000
@@ -132,6 +133,12 @@ async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, tg_user_id: int) -> 
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if today_msk() > REGISTRATION_DEADLINE_MSK:
+        await update.message.reply_text(
+            "Регистрация закрыта с 4 марта 2026. Новых участников больше не принимаем."
+        )
+        return
+    
     context.user_data["menu"] = "main"
     context.user_data["state"] = None
 
@@ -613,20 +620,6 @@ async def finalize_day_job(context: ContextTypes.DEFAULT_TYPE):
         return
     database.finalize_no_submission_for_day(day.isoformat())
 
-async def invite_chat_broadcast_job(context: ContextTypes.DEFAULT_TYPE): # удалить как пойдет в прод 
-    users = database.get_active_users()
-    text = (
-    "Ребята, хотим обсуждать результаты, ошибки, доработки и всё остальное "
-    "по челленджу в одном месте. Для этого сделали отдельный чат — очень "
-    f"просим всех туда вступить: {INVITE_CHAT_URL}"
-)
-
-    for _, tg_id, _, _, _, _ in users:
-        await safe_send_message(context.bot, tg_id, text)
-
-    logger.info("Invite broadcast finished, users=%s", len(users))
-
-
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Unhandled error: %s", context.error)
@@ -652,14 +645,6 @@ def main():
         time=time(hour=0, minute=0, second=5, tzinfo=MSK)
     )
 
-    send_at = datetime.datetime(2026, 3, 3, 19, 0, 0, tzinfo=MSK) # удалить как пойдет в прод 
-    now = now_msk()
-
-    if now.date() == datetime.date(2026, 3, 3):
-        if now < send_at:
-            app.job_queue.run_once(invite_chat_broadcast_job, when=send_at)
-        else:
-            app.job_queue.run_once(invite_chat_broadcast_job, when=1)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
