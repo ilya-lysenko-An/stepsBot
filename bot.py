@@ -110,7 +110,10 @@ def evaluate_result(submitted_on_time: int, steps_value: int) -> tuple[str, str]
 
 def build_notify_keyboard(notifications_enabled: int):
     btn = "Выкл уведомления" if notifications_enabled else "Вкл уведомления"
-    return ReplyKeyboardMarkup([[btn]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        [[btn], ["Назад"]],
+        resize_keyboard=True
+    )
 
 
 async def safe_send_message(bot, chat_id: int, text: str):
@@ -302,7 +305,7 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     if text == "Назад":
         current = context.user_data.get("menu", "main")
-        if current == "stats":
+        if current in ("stats", "notifications"):
             context.user_data["menu"] = "menu"
             await update.message.reply_text("Меню:", reply_markup=MENU_KEYBOARD)
         else:
@@ -311,6 +314,7 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
 
     if text == "Уведомления":
+        context.user_data["menu"] = "notifications"
         user = update.effective_user
         settings = database.get_user_settings(user.id)
         if settings is None:
