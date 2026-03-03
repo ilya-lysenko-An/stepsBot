@@ -354,12 +354,20 @@ async def handle_notifications(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if text == "Выкл уведомления":
         database.set_notifications_enabled(user_id, 0)
-        await update.message.reply_text("Уведомления отключены.", reply_markup=MENU_KEYBOARD)
+        context.user_data["menu"] = "notifications"
+        await update.message.reply_text(
+            "Уведомления отключены.",
+            reply_markup=build_notify_keyboard(0)
+        )
         return True
 
     if text == "Вкл уведомления":
         database.set_notifications_enabled(user_id, 1)
-        await update.message.reply_text("Уведомления включены.", reply_markup=MENU_KEYBOARD)
+        context.user_data["menu"] = "notifications"
+        await update.message.reply_text(
+            "Уведомления включены.",
+            reply_markup=build_notify_keyboard(1)
+        )
         return True
 
     return False
