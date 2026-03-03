@@ -40,6 +40,7 @@ DAILY_TARGET = 10_000
 DAILY_PENALTY_RUB = 100
 CHANNEL_ID = "@begogram_ch"
 CHANNEL_URL = "https://t.me/begogram_ch"
+INVITE_CHAT_URL = "https://t.me/+jQApV8d7yuU1YWEy"
 
 
 JOIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -600,6 +601,20 @@ async def finalize_day_job(context: ContextTypes.DEFAULT_TYPE):
         return
     database.finalize_no_submission_for_day(day.isoformat())
 
+async def invite_chat_broadcast_job(context: ContextTypes.DEFAULT_TYPE): # удалить как пойдет в прод 
+    users = database.get_active_users()
+    text = (
+    "Ребята, хотим обсуждать результаты, ошибки, доработки и всё остальное "
+    "по челленджу в одном месте. Для этого сделали отдельный чат — очень "
+    f"просим всех туда вступить: {INVITE_CHAT_URL}"
+)
+
+    for _, tg_id, _, _, _, _ in users:
+        await safe_send_message(context.bot, tg_id, text)
+
+    logger.info("Invite broadcast finished, users=%s", len(users))
+
+
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Unhandled error: %s", context.error)
@@ -624,6 +639,15 @@ def main():
         finalize_day_job,
         time=time(hour=0, minute=0, second=5, tzinfo=MSK)
     )
+
+    send_at = datetime.datetime(2026, 3, 3, 19, 0, 0, tzinfo=MSK) # удалить как пойдет в прод 
+    now = now_msk()
+
+    if now.date() == datetime.date(2026, 3, 3):
+        if now < send_at:
+            app.job_queue.run_once(invite_chat_broadcast_job, when=send_at)
+        else:
+            app.job_queue.run_once(invite_chat_broadcast_job, when=1)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
