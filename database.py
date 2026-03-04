@@ -300,5 +300,29 @@ def get_all_time_ranking():
             WHERE u.is_active = 1
             GROUP BY u.id, u.first_name, u.username
             ORDER BY total_steps DESC, u.id ASC
+            LIMIT 20
         """)
         return cur.fetchall()
+    
+def get_user_rank_and_total_users(user_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            WITH totals AS (
+                SELECT
+                    u.id AS user_id,
+                    COALESCE(SUM(d.steps_value), 0) AS total_steps
+                FROM users u
+                LEFT JOIN daily_status d ON d.user_id = u.id
+                WHERE u.is_active = 1
+                GROUP BY u.id
+            )
+            SELECT
+                (SELECT COUNT(*) + 1 FROM totals t2 WHERE t2.total_steps > t1.total_steps) AS user_rank,
+                (SELECT COUNT(*) FROM totals) AS total_users
+            FROM totals t1
+            WHERE t1.user_id = ?
+        """, (user_id,))
+        row = cur.fetchone()
+        return row if row else (None, 0)
+

@@ -61,7 +61,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 STATS_KEYBOARD = ReplyKeyboardMarkup(
-    [["Топ за все время", "Топ 10 вчера"],
+    [["Топ 20 все время", "Топ 10 вчера"],
      ["Моя активность", "Отставание от лидера"],
      ["Место в топе", "Назад"]],
     resize_keyboard=True
@@ -130,18 +130,20 @@ def format_top10_yesterday(rows, day_str: str) -> str:
 
     return "\n".join(lines)
 
-def format_all_time_ranking(rows, my_user_id: int) -> str:
+def format_all_time_ranking(rows, my_user_id: int, my_rank: int, total_users: int) -> str:
     if not rows:
-        return "Топ за все время\n\nПока нет данных."
+        return "Топ-20 за все время\n\nПока нет данных."
     
-    lines = ["Топ за все время\n"]
+    lines = ["Топ-20 за все время\n"]
     for idx, (user_id, first_name, username, total_steps) in enumerate(rows, start=1):
          name = first_name or "Без имени"
          uname = f"@{username}" if username else "без username"
          steps = f"{int(total_steps):,}".replace(",", " ")
-         mark = "  👈 ты" if user_id == my_user_id else ""
-         lines.append(f"{idx}) {name} — {uname} — {steps}{mark}")
+         lines.append(f"{idx}) {name} — {uname} — {steps}")
 
+    if my_rank is not None:
+        lines.append("")
+        lines.append(f"🏆 Твое место: {my_rank} / {total_users}")
     return "\n".join(lines)
          
 
@@ -410,17 +412,19 @@ async def handle_notifications(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
-    if text == "Топ 30 all time":
+    if text == "Топ 20 все время":
         user = update.effective_user
         my_user_id = database.get_user_id(user.id)
         if my_user_id is None:
             await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
             return True
+        
         rows = database.get_all_time_ranking()
-        msg = format_all_time_ranking(rows, my_user_id)
+        my_rank, total_users = database.get_user_rank_and_total_users(my_user_id)
+        msg = format_all_time_ranking(rows, my_user_id, my_rank, total_users)
         await update.message.reply_text(msg)
         return True
-
+  
     if text == "Топ 10 вчера":
         day = today_msk() - datetime.timedelta(days=1)
         rows = database.get_top10_for_day(day.isoformat())
