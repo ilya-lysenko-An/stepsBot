@@ -47,8 +47,6 @@ def init_db():
         conn.commit()
 
 
-# ---------- users ----------
-
 def add_user(tg_id: int, username: str = None, first_name: str = None, club: str = None):
     with get_con() as conn:
         cur = conn.cursor()
@@ -270,4 +268,21 @@ def get_leader_and_user_total(user_id: int):
         user_total = cur.fetchone()[0] or 0
 
         return leader, int(user_total)
+    
+def get_top10_for_day(day_msk: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                u.first_name,
+                u.username,
+                d.steps_value
+            FROM daily_status d
+            JOIN users u ON u.id = d.user_id
+            WHERE d.day_msk = ?
+            ORDER BY d.steps_value DESC, u.id ASC
+            LIMIT 10
+        """, (day_msk,))
+        return cur.fetchall()
+
 

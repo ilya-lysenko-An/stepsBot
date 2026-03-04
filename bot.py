@@ -116,6 +116,20 @@ def build_notify_keyboard(notifications_enabled: int):
         resize_keyboard=True
     )
 
+def format_top10_yesterday(rows, day_str: str) -> str:
+    header = f"Топ-10 за вчера ({day_str})\n"
+    if not rows:
+        return header + "\nЗа этот день пока нет данных."
+    
+    lines = [header]
+    for idx, (first_name, username, steps_value) in enumerate(rows, start=1):
+         display_name = first_name or "Без имени"
+         username_part = f"@{username}" if username else "без username"
+         steps_part = f"{int(steps_value):,}".replace(",", " ")
+         lines.append(f"{idx}) {display_name} — {username_part} — {steps_part}")
+
+    return "\n".join(lines)
+
 
 async def safe_send_message(bot, chat_id: int, text: str):
     try:
@@ -386,7 +400,10 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
 
     if text == "Топ 10 вчера":
-        await update.message.reply_text("Раздел в разработке.")
+        day = today_msk() - datetime.timedelta(days=1)
+        rows = database.get_top10_for_day(day.isoformat())
+        msg = format_top10_yesterday(rows, day.strftime("%d.%m.%Y"))
+        await update.message.reply_text(msg)
         return True
 
     if text == "Моя активность":
