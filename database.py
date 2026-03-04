@@ -286,3 +286,19 @@ def get_top10_for_day(day_msk: str):
         return cur.fetchall()
 
 
+def get_all_time_ranking():
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                u.id,
+                u.first_name,
+                u.username,
+                COALESCE(SUM(d.steps_value), 0) AS total_steps
+            FROM users u
+            LEFT JOIN daily_status d ON d.user_id = u.id
+            WHERE u.is_active = 1
+            GROUP BY u.id, u.first_name, u.username
+            ORDER BY total_steps DESC, u.id ASC
+        """)
+        return cur.fetchall()
