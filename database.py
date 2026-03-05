@@ -326,3 +326,31 @@ def get_user_rank_and_total_users(user_id: int):
         row = cur.fetchone()
         return row if row else (None, 0)
 
+def get_user_rank_for_day(day_msk: str, user_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            WITH day_totals AS (
+                SELECT
+                    u.id AS user_id,
+                    COALESCE(d.steps_value, 0) AS steps_value
+                FROM users u
+                LEFT JOIN daily_status d
+                    ON d.user_id = u.id
+                   AND d.day_msk = ?
+                WHERE u.is_active = 1
+            )
+            SELECT
+                (
+                    SELECT COUNT(*) + 1
+                    FROM day_totals t2
+                    WHERE t2.steps_value > t1.steps_value
+                       OR (t2.steps_value = t1.steps_value AND t2.user_id < t1.user_id)
+                ) AS user_rank,
+                (SELECT COUNT(*) FROM day_totals) AS total_users
+            FROM day_totals t1
+            WHERE t1.user_id = ?
+        """, (day_msk, user_id))
+        row = cur.fetchone()
+        return row if row else (None, 0)
+
