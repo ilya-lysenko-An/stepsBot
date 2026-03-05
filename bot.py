@@ -116,19 +116,24 @@ def build_notify_keyboard(notifications_enabled: int):
         resize_keyboard=True
     )
 
-def format_top10_yesterday(rows, day_str: str) -> str:
+def format_top10_yesterday(rows, day_str: str, my_rank: int = None, total_users: int = None) -> str:
     header = f"Топ-10 за вчера ({day_str})\n"
     if not rows:
-        return header + "\nЗа этот день пока нет данных."
+        return header + "\nЗа этот день пока нет данных"
     
     lines = [header]
-    for idx, (first_name, username, steps_value) in enumerate(rows, start=1):
-         display_name = first_name or "Без имени"
-         username_part = f"@{username}" if username else "без username"
-         steps_part = f"{int(steps_value):,}".replace(",", " ")
-         lines.append(f"{idx}) {display_name} — {username_part} — {steps_part}")
+    for idx, (first_name, username, steps_value) in enumerate(rows, start = 1):
+        display_name = first_name or "Без имени"
+        username_part = f"@{username}" if username else "без username"
+        steps_part = f"{int(steps_value):,}".replace(","," ")
+        lines.append(f"{idx}) {display_name} - {username_part} - {steps_part}")
+
+    if my_rank is not None:
+        lines.append("")
+        lines.append(f"🏆 Твое место: {my_rank} / {total_users}")
 
     return "\n".join(lines)
+
 
 def format_all_time_ranking(rows, my_user_id: int, my_rank: int, total_users: int) -> str:
     if not rows:
@@ -426,9 +431,18 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
   
     if text == "Топ 10 вчера":
+        user = update.effective_user
+        my_user_id = database.get_user_id(user.id)
+        if my_user_id is None:
+            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
+            return True
         day = today_msk() - datetime.timedelta(days=1)
-        rows = database.get_top10_for_day(day.isoformat())
-        msg = format_top10_yesterday(rows, day.strftime("%d.%m.%Y"))
+        day_iso = day.isoformat()
+
+        rows = database.get_top10_for_day(day_iso)
+        my_rank, total_users = database.get_user_rank_for_day(day_iso, my_user_id)
+
+        msg = format_top10_yesterday(rows, day.strftime("%d.%m.%Y"), my_rank, total_users)
         await update.message.reply_text(msg)
         return True
 
