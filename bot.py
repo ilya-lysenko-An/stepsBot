@@ -157,7 +157,11 @@ async def safe_send_message(bot, chat_id: int, text: str):
     try:
         await bot.send_message(chat_id=chat_id, text=text)
     except (TimedOut, NetworkError) as e:
-        logger.warning("Send message timeout/network error chat_id=%s err=%s", chat_id, e)
+        logger.warning("Send timeout/network chat_id=%s err=%s", chat_id, e)
+        return False
+    except TelegramError as e:
+        logger.warning("Send telegram error chat_id=%s err=%s", chat_id, e)
+        return False
 
 async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, tg_user_id: int) -> bool:
     try:
@@ -694,7 +698,7 @@ def main():
 
     app.job_queue.run_daily(
         reminder_job,
-        time=time(hour=22, minute=0, second=0, tzinfo=MSK)
+        time=time(hour=22, minute=30, second=0, tzinfo=MSK)
     )
 
     app.job_queue.run_daily(
