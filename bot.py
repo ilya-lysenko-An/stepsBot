@@ -698,7 +698,7 @@ def main():
 
     app.job_queue.run_daily(
         reminder_job,
-        time=time(hour=22, minute=30, second=0, tzinfo=MSK)
+        time=time(hour=22, minute=00, second=0, tzinfo=MSK)
     )
 
     app.job_queue.run_daily(
