@@ -664,15 +664,19 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
         row = database.get_daily_status(user_id, day_str)
         if row is None:
-            await safe_send_message(
-                context.bot,
-                tg_id,
-                (
-                    "Напоминание.\n"
-                    "Шаги за сегодня сами себя не внесут.\n"
-                    "До 23:59 ещё можно спастись."
+            try:
+                await context.bot.send_message(
+                    chat_id=tg_id,
+                    text=(
+                        "Напоминание.\n"
+                        "Шаги за сегодня сами себя не внесут.\n"
+                        "До 23:59 ещё можно спастись."
+                    ),
+                    reply_markup=MAIN_KEYBOARD
                 )
-            )
+            except TelegramError as e:
+                logger.warning("Send telegram error chat_id=%s err=%s", tg_id, e)
+           
 
 
 async def finalize_day_job(context: ContextTypes.DEFAULT_TYPE):
