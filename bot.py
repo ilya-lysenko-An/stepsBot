@@ -649,6 +649,27 @@ async def handle_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
 
     return False
 
+async def handle_bank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    user_id = database.get_user_id(user.id)
+    if user_id is None:
+        await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
+        return
+
+    date_from = CHALLENGE_START_DATE_MSK.isoformat()
+    date_to = CHALLENGE_END_DATE_MSK.isoformat()
+
+    total_minus, user_minus = database.get_bank_stats(date_from, date_to, user_id)
+    total_bank = total_minus * DAILY_PENALTY_RUB
+    user_bank = user_minus * DAILY_PENALTY_RUB
+    user_pct = (user_bank / total_bank * 100) if total_bank > 0 else 0
+
+    msg = (
+        f"Общий банк: {total_bank} ₽\n"
+        f"Твой вклад: {user_bank} ₽ ({user_pct:.1f}%)"
+    )
+    await update.message.reply_text(msg)
+
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     day = today_msk()
