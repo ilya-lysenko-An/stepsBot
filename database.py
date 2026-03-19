@@ -325,6 +325,30 @@ def get_user_rank_and_total_users(user_id: int):
         """, (user_id,))
         row = cur.fetchone()
         return row if row else (None, 0)
+    
+def get_bank_stats(date_from: str, date_to: str, user_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM daily_status
+            WHERE result = '-'
+              AND day_msk BETWEEN ? AND ?
+        """, (date_from, date_to))
+        total_minus = int(cur.fetchone()[0] or 0)
+
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM daily_status
+            WHERE result = '-'
+              AND user_id = ?
+              AND day_msk BETWEEN ? AND ?
+        """, (user_id, date_from, date_to))
+        user_minus = int(cur.fetchone()[0] or 0)
+
+        return total_minus, user_minus
+
 
 def get_user_rank_for_day(day_msk: str, user_id: int):
     with get_con() as conn:
