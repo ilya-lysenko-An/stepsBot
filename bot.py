@@ -670,6 +670,18 @@ async def handle_bank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
     await update.message.reply_text(msg)
 
+async def invite_chat_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
+    users = database.get_active_users()
+    text = (
+        "Ребята, хотим обсуждать результаты, ошибки, доработки и всё остальное "
+        "по челленджу в одном месте. Для этого сделали отдельный чат — очень "
+        f"просим всех туда вступить: {INVITE_CHAT_URL}"
+    )
+
+    for _, tg_id, _, _, _, _ in users:
+        await safe_send_message(context.bot, tg_id, text)
+
+
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     day = today_msk()
@@ -721,6 +733,12 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
+    send_at = datetime.datetime(2026, 3, 20, 9, 0, 0, tzinfo=MSK)
+    now = now_msk()
+
+    if now < send_at:
+        app.job_queue.run_once(invite_chat_broadcast_job, when=send_at)
+
     app.job_queue.run_daily(
         reminder_job,
         time=time(hour=22, minute=00, second=0, tzinfo=MSK)
@@ -730,7 +748,6 @@ def main():
         finalize_day_job,
         time=time(hour=0, minute=0, second=5, tzinfo=MSK)
     )
-
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
