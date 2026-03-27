@@ -42,6 +42,10 @@ DAILY_PENALTY_RUB = 100
 CHANNEL_ID = "@begogram_ch"
 CHANNEL_URL = "https://t.me/begogram_ch"
 INVITE_CHAT_URL = "https://t.me/+jQApV8d7yuU1YWEy"
+FUNDRAISER_URL = os.getenv("URL")
+INVITE_SEND_AT = datetime.datetime(2026, 3, 27, 16, 30, 0, tzinfo=MSK)
+FUND_SEND_AT   = datetime.datetime(2026, 3, 27, 17, 0, 0, tzinfo=MSK)
+
 
 
 JOIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -63,7 +67,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
 STATS_KEYBOARD = ReplyKeyboardMarkup(
     [["Топ 20 все время", "Топ 10 вчера"],
      ["Моя активность", "Отставание от лидера"],
-     ["Место в топе", "Назад"]],
+     ["Банк", "Назад"]],
     resize_keyboard=True
 )
 
@@ -510,8 +514,8 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
         return True
 
-    if text == "Место в топе":
-        await update.message.reply_text("Раздел в разработке.")
+    if text == "Банк":
+        await handle_bank(update, context)
         return True
 
     return False
@@ -681,6 +685,17 @@ async def invite_chat_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
     for _, tg_id, _, _, _, _ in users:
         await safe_send_message(context.bot, tg_id, text)
 
+async def fundraiser_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
+    users = database.get_active_users()
+    text = (
+        "Наш замечательный челлендж подходит к концу. "
+        "Вы знаете сумму своих штрафов, а теперь ещё знаете ссылку на сбор, "
+        f"куда эту сумму можно перевести: {FUNDRAISER_URL}"
+    )
+
+    for _, tg_id, _, _, _, _ in users:
+        await safe_send_message(context.bot, tg_id, text)
+
 
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
@@ -733,11 +748,13 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
-    send_at = datetime.datetime(2026, 3, 20, 9, 0, 0, tzinfo=MSK)
     now = now_msk()
 
-    if now < send_at:
-        app.job_queue.run_once(invite_chat_broadcast_job, when=send_at)
+    if now < INVITE_SEND_AT:
+        app.job_queue.run_once(invite_chat_broadcast_job, when=INVITE_SEND_AT)
+
+    if now < FUND_SEND_AT:
+        app.job_queue.run_once(fundraiser_broadcast_job, when=FUND_SEND_AT)
 
     app.job_queue.run_daily(
         reminder_job,
@@ -756,6 +773,3 @@ def main():
     logger.info("Бот запущен")
     app.run_polling()
 
-
-if __name__ == "__main__":
-    main()
