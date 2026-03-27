@@ -773,3 +773,6 @@ def main():
     logger.info("Бот запущен")
     app.run_polling()
 
+if __name__ == "__main__":
+    main()
+
