@@ -42,10 +42,10 @@ DAILY_PENALTY_RUB = 100
 CHANNEL_ID = "@begogram_ch"
 CHANNEL_URL = "https://t.me/begogram_ch"
 INVITE_CHAT_URL = "https://t.me/+jQApV8d7yuU1YWEy"
-FUNDRAISER_URL = os.getenv("URL")
-FUNDRAISER_URL_2 = "https://messenger.online.sberbank.ru/sl/oUVZUrKcOwBJORTLzЭ"
+FUNDRAISER_URL = "https://www.tbank.ru/cf/3Lu4w17wJN8"
+FUNDRAISER_URL_2 = "https://messenger.online.sberbank.ru/sl/oUVZUrKcOwBJORTLz"
 INVITE_SEND_AT = datetime.datetime(2026, 3, 27, 16, 30, 0, tzinfo=MSK)
-FUND_SEND_AT   = datetime.datetime(2026, 3, 29, 10, 30, 0, tzinfo=MSK)
+FUND_SEND_AT   = datetime.datetime(2026, 3, 29, 10, 47, 0, tzinfo=MSK)
 
 
 
@@ -689,10 +689,11 @@ async def invite_chat_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
 async def fundraiser_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
     users = database.get_active_users()
     text = (
+        "ВАЖНО: ПРЕДЫДУЩИЕ ССЫЛКИ НЕДЕЙСТВИТЕЛЬНЫ\n\n"
         "Наш замечательный челлендж подходит к концу. "
         "Вы знаете сумму своих штрафов, а теперь ещё знаете ссылку на сбор, "
-        f"куда эту сумму можно перевести: {FUNDRAISER_URL}"
-        "Для вашего удобства еще и сбер сделали!"
+        f"куда эту сумму можно перевести: {FUNDRAISER_URL}\n\n"
+        "Для вашего удобства ещё и Сбер сделали! "
         f"тык: {FUNDRAISER_URL_2}"
     )
 
