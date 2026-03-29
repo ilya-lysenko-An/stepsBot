@@ -43,8 +43,9 @@ CHANNEL_ID = "@begogram_ch"
 CHANNEL_URL = "https://t.me/begogram_ch"
 INVITE_CHAT_URL = "https://t.me/+jQApV8d7yuU1YWEy"
 FUNDRAISER_URL = os.getenv("URL")
+FUNDRAISER_URL_2 = "https://messenger.online.sberbank.ru/sl/oUVZUrKcOwBJORTLzЭ"
 INVITE_SEND_AT = datetime.datetime(2026, 3, 27, 16, 30, 0, tzinfo=MSK)
-FUND_SEND_AT   = datetime.datetime(2026, 3, 27, 17, 0, 0, tzinfo=MSK)
+FUND_SEND_AT   = datetime.datetime(2026, 3, 29, 10, 30, 0, tzinfo=MSK)
 
 
 
@@ -691,6 +692,8 @@ async def fundraiser_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
         "Наш замечательный челлендж подходит к концу. "
         "Вы знаете сумму своих штрафов, а теперь ещё знаете ссылку на сбор, "
         f"куда эту сумму можно перевести: {FUNDRAISER_URL}"
+        "Для вашего удобства еще и сбер сделали!"
+        f"тык: {FUNDRAISER_URL_2}"
     )
 
     for _, tg_id, _, _, _, _ in users:
