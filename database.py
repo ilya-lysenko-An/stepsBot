@@ -513,3 +513,22 @@ def get_top50_all_time_stats(date_from: str, date_to: str, total_days: int):
             for (username, first_name, total_steps, minus_count) in rows
         ]
 
+
+def get_top10_penalties(date_from: str, date_to: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                u.username,
+                u.first_name,
+                COUNT(*) AS minus_count
+            FROM daily_status d
+            JOIN users u ON u.id = d.user_id
+            WHERE d.day_msk BETWEEN ? AND ?
+              AND d.result = '-'
+            GROUP BY u.id, u.username, u.first_name
+            ORDER BY minus_count DESC, u.id ASC
+            LIMIT 10
+        """, (date_from, date_to))
+        return cur.fetchall()
+

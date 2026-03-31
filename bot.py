@@ -218,6 +218,22 @@ def format_top50_message(rows) -> str:
 
     return "\n".join(lines)
 
+def format_top10_penalties(rows) -> str:
+    header = "Топ‑10 штрафников сезона:\n"
+    lines = [header]
+
+    if not rows:
+        return header + "\nНикто не штрафился. Подозрительно идеально."
+
+    for idx, (username, first_name, minus_count) in enumerate(rows, start=1):
+        uname = f"@{username}" if username else "без username"
+        name = first_name or "Без имени"
+        penalty_rub = minus_count * DAILY_PENALTY_RUB
+        lines.append(f"{idx}) {uname} - {name} - {penalty_rub} ₽")
+
+    lines.append("")
+    lines.append("Уважаемые штрафники, в следующий раз — ноги в руки, а не штрафы в банк.")
+    return "\n".join(lines)
 
 
          
@@ -819,6 +835,16 @@ async def final_top50_job(context: ContextTypes.DEFAULT_TYPE):
     for _, tg_id, _, _, _, _ in users:
         await safe_send_message(context.bot, tg_id, text)
 
+async def final_top10_penalties_job(context: ContextTypes.DEFAULT_TYPE):
+    date_from = CHALLENGE_START_DATE_MSK.isoformat()
+    date_to = CHALLENGE_END_DATE_MSK.isoformat()
+
+    rows = database.get_top10_penalties(date_from, date_to)
+    text = format_top10_penalties(rows)
+
+    users = database.get_active_users()
+    for _, tg_id, _, _, _, _ in users:
+        await safe_send_message(context.bot, tg_id, text)
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -842,13 +868,18 @@ def main():
     if now < FUND_SEND_AT:
         app.job_queue.run_once(fundraiser_broadcast_job, when=FUND_SEND_AT)
 
-    FINAL_REPORT_AT = datetime.datetime(2026, 4, 1, 0, 0, 0, tzinfo=MSK)
+    FINAL_REPORT_AT = datetime.datetime(2026, 4, 1, 7, 15, 0, tzinfo=MSK)
     if now < FINAL_REPORT_AT:
         app.job_queue.run_once(final_report_job, when=FINAL_REPORT_AT)
 
-    FINAL_TOP50_AT = datetime.datetime(2026, 4, 1, 0, 0, 30, tzinfo=MSK)
+    FINAL_TOP50_AT = datetime.datetime(2026, 4, 1, 7, 15, 15, tzinfo=MSK)
     if now < FINAL_TOP50_AT:
         app.job_queue.run_once(final_top50_job, when=FINAL_TOP50_AT)
+
+    FINAL_TOP10_PENALTIES_AT = datetime.datetime(2026, 4, 1, 7, 15, 30, tzinfo=MSK)
+    if now < FINAL_TOP10_PENALTIES_AT:
+        app.job_queue.run_once(final_top10_penalties_job, when=FINAL_TOP10_PENALTIES_AT)
+
 
 
     app.job_queue.run_daily(
