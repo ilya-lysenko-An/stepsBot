@@ -206,6 +206,19 @@ def build_final_report_message() -> str:
 
     return "\n".join(msg)
 
+def format_top50_message(rows) -> str:
+    header = "Топ‑50 за весь период:\n"
+    lines = [header]
+
+    for idx, (username, first_name, total_steps, avg_steps, minus_count) in enumerate(rows, start=1):
+        uname = f"@{username}" if username else "без username"
+        name = first_name or "Без имени"
+        penalty_rub = minus_count * DAILY_PENALTY_RUB
+        lines.append(f"{idx}) {uname} - {name} - {total_steps} - ({avg_steps}) - {penalty_rub} ₽")
+
+    return "\n".join(lines)
+
+
 
          
 async def safe_send_message(bot, chat_id: int, text: str):
@@ -794,6 +807,19 @@ async def finalize_day_job(context: ContextTypes.DEFAULT_TYPE):
         return
     database.finalize_no_submission_for_day(day.isoformat())
 
+async def final_top50_job(context: ContextTypes.DEFAULT_TYPE):
+    date_from = CHALLENGE_START_DATE_MSK.isoformat()
+    date_to = CHALLENGE_END_DATE_MSK.isoformat()
+    total_days = (CHALLENGE_END_DATE_MSK - CHALLENGE_START_DATE_MSK).days + 1
+
+    rows = database.get_top50_all_time_stats(date_from, date_to, total_days)
+    text = format_top50_message(rows)
+
+    users = database.get_active_users()
+    for _, tg_id, _, _, _, _ in users:
+        await safe_send_message(context.bot, tg_id, text)
+
+
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Unhandled error: %s", context.error)
@@ -819,6 +845,11 @@ def main():
     FINAL_REPORT_AT = datetime.datetime(2026, 4, 1, 0, 0, 0, tzinfo=MSK)
     if now < FINAL_REPORT_AT:
         app.job_queue.run_once(final_report_job, when=FINAL_REPORT_AT)
+
+    FINAL_TOP50_AT = datetime.datetime(2026, 4, 1, 0, 0, 30, tzinfo=MSK)
+    if now < FINAL_TOP50_AT:
+        app.job_queue.run_once(final_top50_job, when=FINAL_TOP50_AT)
+
 
     app.job_queue.run_daily(
         reminder_job,

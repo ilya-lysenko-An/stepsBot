@@ -486,3 +486,30 @@ def get_users_without_penalties(date_from: str, date_to: str):
         """, (date_from, date_to))
         return int(cur.fetchone()[0] or 0)
 
+
+def get_top50_all_time_stats(date_from: str, date_to: str, total_days: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                u.username,
+                u.first_name,
+                COALESCE(SUM(d.steps_value), 0) AS total_steps,
+                COALESCE(SUM(CASE WHEN d.result = '-' THEN 1 ELSE 0 END), 0) AS minus_count
+            FROM users u
+            LEFT JOIN daily_status d
+                ON d.user_id = u.id
+               AND d.day_msk BETWEEN ? AND ?
+            WHERE u.is_active = 1
+            GROUP BY u.id, u.username, u.first_name
+            ORDER BY total_steps DESC, u.id ASC
+            LIMIT 50
+        """, (date_from, date_to))
+        rows = cur.fetchall()
+
+        # посчитаем средние на питоне
+        return [
+            (username, first_name, total_steps, int(total_steps / total_days) if total_days > 0 else 0, minus_count)
+            for (username, first_name, total_steps, minus_count) in rows
+        ]
+
