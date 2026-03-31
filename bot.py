@@ -155,9 +155,59 @@ def format_all_time_ranking(rows, my_user_id: int, my_rank: int, total_users: in
         lines.append("")
         lines.append(f"🏆 Твое место: {my_rank} / {total_users}")
     return "\n".join(lines)
+
+def build_final_report_message() -> str:
+    date_from = CHALLENGE_START_DATE_MSK.isoformat()
+    date_to = CHALLENGE_END_DATE_MSK.isoformat()
+    total_days = (CHALLENGE_END_DATE_MSK - CHALLENGE_START_DATE_MSK).days + 1
+
+    top3 = database.get_top3_total(date_from, date_to)
+    max_day = database.get_max_day(date_from, date_to)
+    min_day = database.get_min_day_nonzero(date_from, date_to)
+    min_total_full = database.get_min_total_full_days(date_from, date_to, total_days)
+    total_steps, minus_count = database.get_summary_totals(date_from, date_to)
+    no_penalties_count = database.get_users_without_penalties(date_from, date_to)
+
+    avg_steps = int(total_steps / total_days) if total_days > 0 else 0
+    bank_rub = minus_count * DAILY_PENALTY_RUB
+    total_km = total_steps / 1000
+
+    def fmt_name(username, first_name):
+        if username:
+            return f"{first_name} — @{username}"
+        return f"{first_name}"
+
+    msg = []
+    msg.append("Финиш! Челлендж закрыт, и вот наши герои:\n")
+
+    for i, row in enumerate(top3, start=1):
+        username, first_name, total = row
+        msg.append(f"{i}) {fmt_name(username, first_name)} — {total}")
+
+    msg.append("")
+    msg.append("Номинации вечера:\n")
+
+    if max_day:
+        u, f, steps, _day = max_day
+        msg.append(f"🏎 Самый мощный день: {steps} шагов — {fmt_name(u, f)}")
+    if min_day:
+        u, f, steps, _day = min_day
+        msg.append(f"🐢 Самый скромный день: {steps} шагов — {fmt_name(u, f)}")
+    if min_total_full:
+        u, f, total = min_total_full
+        msg.append(f"🖤 Чёрная майка Джиро: {total} шагов — {fmt_name(u, f)}")
+
+    msg.append("")
+    msg.append("Итоги в цифрах:\n")
+    msg.append(f"👣 Всего шагов: {total_steps} (≈ {total_km:.1f} км)")
+    msg.append(f"📊 Среднее в день: {avg_steps}")
+    msg.append(f"💰 Общий банк: {bank_rub} ₽")
+    msg.append(f"🧼 Без штрафов: {no_penalties_count} человек")
+
+    return "\n".join(msg)
+
+
          
-
-
 async def safe_send_message(bot, chat_id: int, text: str):
     try:
         await bot.send_message(chat_id=chat_id, text=text)
@@ -728,6 +778,13 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
                 )
             except TelegramError as e:
                 logger.warning("Send telegram error chat_id=%s err=%s", tg_id, e)
+
+async def final_report_job(context: ContextTypes.DEFAULT_TYPE):
+    text = build_final_report_message()
+    users = database.get_active_users()
+    for _, tg_id, _, _, _, _ in users:
+        await safe_send_message(context.bot, tg_id, text)
+
            
 
 
@@ -751,7 +808,6 @@ def main():
     logger.info("База данных инициализированна")
 
     app = Application.builder().token(TOKEN).build()
-
     now = now_msk()
 
     if now < INVITE_SEND_AT:
@@ -760,9 +816,13 @@ def main():
     if now < FUND_SEND_AT:
         app.job_queue.run_once(fundraiser_broadcast_job, when=FUND_SEND_AT)
 
+    FINAL_REPORT_AT = datetime.datetime(2026, 4, 1, 0, 0, 0, tzinfo=MSK)
+    if now < FINAL_REPORT_AT:
+        app.job_queue.run_once(final_report_job, when=FINAL_REPORT_AT)
+
     app.job_queue.run_daily(
         reminder_job,
-        time=time(hour=22, minute=00, second=0, tzinfo=MSK)
+        time=time(hour=22, minute=0, second=0, tzinfo=MSK)
     )
 
     app.job_queue.run_daily(

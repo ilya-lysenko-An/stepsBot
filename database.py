@@ -377,4 +377,112 @@ def get_user_rank_for_day(day_msk: str, user_id: int):
         """, (day_msk, user_id))
         row = cur.fetchone()
         return row if row else (None, 0)
+    
+
+def get_top3_total(date_from: str, date_to: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.username, u.first_name, SUM(d.steps_value) AS total_steps
+            FROM daily_status d
+            JOIN users u ON u.id = d.user_id
+            WHERE d.day_msk BETWEEN ? AND ?
+            GROUP BY u.id
+            ORDER BY total_steps DESC
+            LIMIT 3
+        """, (date_from, date_to))
+        return cur.fetchall()
+
+
+def get_max_day(date_from: str, date_to: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.username, u.first_name, d.steps_value, d.day_msk
+            FROM daily_status d
+            JOIN users u ON u.id = d.user_id
+            WHERE d.day_msk BETWEEN ? AND ?
+            ORDER BY d.steps_value DESC
+            LIMIT 1
+        """, (date_from, date_to))
+        return cur.fetchone()
+
+
+def get_min_day_nonzero(date_from: str, date_to: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.username, u.first_name, d.steps_value, d.day_msk
+            FROM daily_status d
+            JOIN users u ON u.id = d.user_id
+            WHERE d.day_msk BETWEEN ? AND ?
+              AND d.result_reason != 'no_submission'
+              AND d.steps_value > 0
+            ORDER BY d.steps_value ASC
+            LIMIT 1
+        """, (date_from, date_to))
+        return cur.fetchone()
+
+
+def get_min_total_full_days(date_from: str, date_to: str, total_days: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            WITH per_user AS (
+                SELECT
+                    d.user_id,
+                    COUNT(*) AS days_count,
+                    SUM(d.steps_value) AS total_steps,
+                    SUM(CASE WHEN d.result_reason = 'no_submission' THEN 1 ELSE 0 END) AS no_submission_count
+                FROM daily_status d
+                WHERE d.day_msk BETWEEN ? AND ?
+                GROUP BY d.user_id
+            )
+            SELECT u.username, u.first_name, p.total_steps
+            FROM per_user p
+            JOIN users u ON u.id = p.user_id
+            WHERE p.days_count = ?
+              AND p.no_submission_count = 0
+            ORDER BY p.total_steps ASC
+            LIMIT 1
+        """, (date_from, date_to, total_days))
+        return cur.fetchone()
+
+
+def get_summary_totals(date_from: str, date_to: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COALESCE(SUM(steps_value), 0)
+            FROM daily_status
+            WHERE day_msk BETWEEN ? AND ?
+        """, (date_from, date_to))
+        total_steps = int(cur.fetchone()[0] or 0)
+
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM daily_status
+            WHERE day_msk BETWEEN ? AND ?
+              AND result = '-'
+        """, (date_from, date_to))
+        minus_count = int(cur.fetchone()[0] or 0)
+
+        return total_steps, minus_count
+
+def get_users_without_penalties(date_from: str, date_to: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM users u
+            WHERE u.is_active = 1
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM daily_status d
+                  WHERE d.user_id = u.id
+                    AND d.day_msk BETWEEN ? AND ?
+                    AND d.result = '-'
+              )
+        """, (date_from, date_to))
+        return int(cur.fetchone()[0] or 0)
 
