@@ -35,8 +35,8 @@ logging.getLogger("apscheduler").setLevel(logging.ERROR)
 MSK = ZoneInfo("Europe/Moscow")
 
 REGISTRATION_DEADLINE_MSK = datetime.date(2026, 3, 3)
-CHALLENGE_START_DATE_MSK = datetime.date(2026, 3, 31)   # поправить при необходимости
-CHALLENGE_END_DATE_MSK = datetime.date(2026, 4, 30)     # поправить при необходимости
+CHALLENGE_START_DATE_MSK = datetime.date(2026, 3, 1)   # поправить при необходимости
+CHALLENGE_END_DATE_MSK = datetime.date(2026, 3, 31)     # поправить при необходимости
 DAILY_TARGET = 10_000
 DAILY_PENALTY_RUB = 100
 CHANNEL_ID = "@begogram_ch"
@@ -238,7 +238,10 @@ def format_top10_penalties(rows) -> str:
 def format_penalties_reminder(rows) -> str:
     header = (
         "Напоминание: пора закрыть штрафы и перевести сумму на сбор.\n"
-        f"Ссылки:\n{FUNDRAISER_URL}\n{FUNDRAISER_URL_2}\n\n"
+        "ВАЖНО: предыдущее сообщение не актуально, приносим извинения.\n\n"
+        "Ссылки:\n"
+        f"{FUNDRAISER_URL}\n\n"
+        f"{FUNDRAISER_URL_2}\n\n"
         "Топ должников (по штрафам):\n"
     )
 
@@ -909,7 +912,7 @@ def main():
     if now < FINAL_TOP10_PENALTIES_AT:
         app.job_queue.run_once(final_top10_penalties_job, when=FINAL_TOP10_PENALTIES_AT)
 
-    PENALTIES_REMINDER_AT = datetime.datetime(2026, 4, 1, 21, 0, 0, tzinfo=MSK)
+    PENALTIES_REMINDER_AT = datetime.datetime(2026, 4, 1, 22, 0, 0, tzinfo=MSK)
     if now < PENALTIES_REMINDER_AT:
         app.job_queue.run_once(penalties_reminder_job, when=PENALTIES_REMINDER_AT)
 
