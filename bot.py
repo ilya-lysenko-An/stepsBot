@@ -235,6 +235,24 @@ def format_top10_penalties(rows) -> str:
     lines.append("Уважаемые штрафники, в следующий раз — ноги в руки, а не штрафы в банк.")
     return "\n".join(lines)
 
+def format_penalties_reminder(rows) -> str:
+    header = (
+        "Напоминание: пора закрыть штрафы и перевести сумму на сбор.\n"
+        f"Ссылки:\n{FUNDRAISER_URL}\n{FUNDRAISER_URL_2}\n\n"
+        "Топ должников (по штрафам):\n"
+    )
+
+    if not rows:
+        return header + "\nНикто не штрафился. Легенды."
+
+    lines = [header]
+    for idx, (username, first_name, minus_count) in enumerate(rows, start=1):
+        uname = f"@{username}" if username else "без username"
+        name = first_name or "Без имени"
+        penalty_rub = minus_count * DAILY_PENALTY_RUB
+        lines.append(f"{idx}) {uname} - {name} - {penalty_rub} ₽")
+
+    return "\n".join(lines)
 
          
 async def safe_send_message(bot, chat_id: int, text: str):
@@ -846,6 +864,17 @@ async def final_top10_penalties_job(context: ContextTypes.DEFAULT_TYPE):
     for _, tg_id, _, _, _, _ in users:
         await safe_send_message(context.bot, tg_id, text)
 
+async def penalties_reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    date_from = CHALLENGE_START_DATE_MSK.isoformat()
+    date_to = CHALLENGE_END_DATE_MSK.isoformat()
+
+    rows = database.get_top10_penalties(date_from, date_to)
+    text = format_penalties_reminder(rows)
+
+    users = database.get_active_users()
+    for _, tg_id, _, _, _, _ in users:
+        await safe_send_message(context.bot, tg_id, text)
+
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Unhandled error: %s", context.error)
@@ -880,7 +909,9 @@ def main():
     if now < FINAL_TOP10_PENALTIES_AT:
         app.job_queue.run_once(final_top10_penalties_job, when=FINAL_TOP10_PENALTIES_AT)
 
-
+    PENALTIES_REMINDER_AT = datetime.datetime(2026, 4, 1, 21, 0, 0, tzinfo=MSK)
+    if now < PENALTIES_REMINDER_AT:
+        app.job_queue.run_once(penalties_reminder_job, when=PENALTIES_REMINDER_AT)
 
     app.job_queue.run_daily(
         reminder_job,

@@ -528,7 +528,6 @@ def get_top10_penalties(date_from: str, date_to: str):
               AND d.result = '-'
             GROUP BY u.id, u.username, u.first_name
             ORDER BY minus_count DESC, u.id ASC
-            LIMIT 10
         """, (date_from, date_to))
         return cur.fetchall()
 
