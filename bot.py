@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 import datetime
 from datetime import time
 
@@ -28,24 +29,42 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Технические логи (ошибки/предупреждения/инфо) — в файл с ротацией, чтобы переживали перезапуск.
+_bot_file_handler = RotatingFileHandler(
+    "bot.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8"
+)
+_bot_file_handler.setLevel(logging.INFO)
+_bot_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logger.addHandler(_bot_file_handler)
+
+# Отдельный «аудит-лог»: участие и запись шагов человеко-читаемыми строками в events.log.
+events = logging.getLogger("events")
+events.setLevel(logging.INFO)
+events.propagate = False  # не дублировать в консоль/технический лог
+_events_file_handler = RotatingFileHandler(
+    "events.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8"
+)
+_events_file_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
+events.addHandler(_events_file_handler)
+
+
+def _uname(user) -> str:
+    return f"@{user.username}" if getattr(user, "username", None) else "без username"
+
+
 logging.getLogger("httpx").setLevel(logging.ERROR)
 logging.getLogger("telegram").setLevel(logging.ERROR)
 logging.getLogger("apscheduler").setLevel(logging.ERROR)
 
 MSK = ZoneInfo("Europe/Moscow")
 
-REGISTRATION_DEADLINE_MSK = datetime.date(2026, 3, 3)
-CHALLENGE_START_DATE_MSK = datetime.date(2026, 3, 1)   # поправить при необходимости
-CHALLENGE_END_DATE_MSK = datetime.date(2026, 3, 31)     # поправить при необходимости
+REGISTRATION_DEADLINE_MSK = datetime.date(2026, 6, 3)
+CHALLENGE_START_DATE_MSK = datetime.date(2026, 6, 1)
+CHALLENGE_END_DATE_MSK = datetime.date(2026, 6, 30)
 DAILY_TARGET = 10_000
-DAILY_PENALTY_RUB = 100
 CHANNEL_ID = "@begogram_ch"
 CHANNEL_URL = "https://t.me/begogram_ch"
 INVITE_CHAT_URL = "https://t.me/+jQApV8d7yuU1YWEy"
-FUNDRAISER_URL = "https://www.tbank.ru/cf/3Lu4w17wJN8"
-FUNDRAISER_URL_2 = "https://messenger.online.sberbank.ru/sl/oUVZUrKcOwBJORTLz"
-INVITE_SEND_AT = datetime.datetime(2026, 3, 27, 16, 30, 0, tzinfo=MSK)
-FUND_SEND_AT   = datetime.datetime(2026, 3, 29, 10, 47, 0, tzinfo=MSK)
 
 
 
@@ -66,9 +85,9 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 STATS_KEYBOARD = ReplyKeyboardMarkup(
-    [["Топ 20 все время", "Топ 10 вчера"],
-     ["Моя активность", "Отставание от лидера"],
-     ["Банк", "Назад"]],
+    [["Мой статус", "Мои бонусы"],
+     ["Активные участники", "Моя активность"],
+     ["Назад"]],
     resize_keyboard=True
 )
 
@@ -106,12 +125,94 @@ def is_within_challenge(day: datetime.date) -> bool:
     return CHALLENGE_START_DATE_MSK <= day <= CHALLENGE_END_DATE_MSK
 
 
+def challenge_range() -> tuple[str, str]:
+    return CHALLENGE_START_DATE_MSK.isoformat(), CHALLENGE_END_DATE_MSK.isoformat()
+
+
+def days_left() -> int:
+    return max(0, (CHALLENGE_END_DATE_MSK - today_msk()).days)
+
+
+def current_streak(user_id: int) -> int:
+    """Сколько дней подряд (заканчивая последним записанным днём) норма выполнена (result '+')."""
+    date_from, date_to = challenge_range()
+    rows = database.list_user_daily_results(user_id, date_from, date_to)
+    # rows: (day_msk, steps_value, submitted_on_time, result, result_reason), отсортированы по дате
+    streak = 0
+    for _day, _steps, _on_time, result, _reason in reversed(rows):
+        if result == "+":
+            streak += 1
+        else:
+            break
+    return streak
+
+
 def evaluate_result(submitted_on_time: int, steps_value: int) -> tuple[str, str]:
     if submitted_on_time == 0:
         return "-", "late"
     if steps_value < DAILY_TARGET:
         return "-", "lt_10k"
     return "+", "ok"
+
+
+def resolve_day_with_bonus(user_id: int, submitted_on_time: int, steps: int, current):
+    """
+    Применяет логику бонусов «день отдыха» к одному дню.
+
+    Возвращает (result, reason, bonus_used, action, remaining_balance), где action:
+      - "ok"       : норма выполнена, бонус не нужен
+      - "refunded" : норма выполнена, ранее списанный за этот день бонус возвращён
+      - "used"     : норма не выполнена, списан 1 бонус, день засчитан
+      - "kept"     : норма не выполнена, день уже был покрыт бонусом ранее (повторно не списываем)
+      - "no_bonus" : норма не выполнена и бонусов нет — день не засчитан
+    """
+    base_result, base_reason = evaluate_result(submitted_on_time, steps)
+    prev_bonus_used = current[7] if (current and len(current) > 7) else 0
+
+    if base_result == "+":
+        if prev_bonus_used:
+            balance = database.adjust_bonus_balance(user_id, +1)  # вернуть бонус, день и так зачтён
+            return "+", "ok", 0, "refunded", balance
+        return "+", "ok", 0, "ok", database.get_bonus_balance(user_id)
+
+    # норма не выполнена
+    if prev_bonus_used:
+        # день уже покрыт ранее списанным бонусом — оставляем как есть
+        return "+", "bonus", 1, "kept", database.get_bonus_balance(user_id)
+
+    balance = database.get_bonus_balance(user_id)
+    if balance > 0:
+        remaining = database.adjust_bonus_balance(user_id, -1)
+        return "+", "bonus", 1, "used", remaining
+
+    return base_result, base_reason, 0, "no_bonus", 0
+
+
+def bonus_reply_text(action: str, remaining: int) -> str:
+    if action == "ok":
+        return "Норма выполнена. Ты в игре! 🟢"
+    if action == "used":
+        return (
+            "Норма не выполнена, но я списал 1 бонус «день отдыха» — день засчитан, ты остаёшься в игре.\n"
+            f"Осталось бонусов: {remaining}."
+        )
+    if action == "kept":
+        return (
+            "Записал. Этот день уже был покрыт бонусом «день отдыха» ранее.\n"
+            f"Бонусов осталось: {remaining}."
+        )
+    if action == "refunded":
+        return (
+            "Записал. Норма выполнена — ранее списанный за этот день бонус возвращён, ты снова в игре.\n"
+            f"Бонусов: {remaining}."
+        )
+    if action == "no_bonus":
+        return (
+            "Норма не выполнена, и бонусов «день отдыха» нет.\n"
+            "К сожалению, ты выбыл из розыгрыша призового фонда. "
+            "Но можешь продолжать ходить для себя — в следующем месяце будет новый челлендж. 🔴"
+        )
+    return "Записал."
 
 
 def build_notify_keyboard(notifications_enabled: int):
@@ -121,143 +222,6 @@ def build_notify_keyboard(notifications_enabled: int):
         resize_keyboard=True
     )
 
-def format_top10_yesterday(rows, day_str: str, my_rank: int = None, total_users: int = None) -> str:
-    header = f"Топ-10 за вчера ({day_str})\n"
-    if not rows:
-        return header + "\nЗа этот день пока нет данных"
-    
-    lines = [header]
-    for idx, (first_name, username, steps_value) in enumerate(rows, start = 1):
-        display_name = first_name or "Без имени"
-        username_part = f"@{username}" if username else "без username"
-        steps_part = f"{int(steps_value):,}".replace(","," ")
-        lines.append(f"{idx}) {display_name} - {username_part} - {steps_part}")
-
-    if my_rank is not None:
-        lines.append("")
-        lines.append(f"🏆 Твое место: {my_rank} / {total_users}")
-
-    return "\n".join(lines)
-
-
-def format_all_time_ranking(rows, my_user_id: int, my_rank: int, total_users: int) -> str:
-    if not rows:
-        return "Топ-20 за все время\n\nПока нет данных."
-    
-    lines = ["Топ-20 за все время\n"]
-    for idx, (user_id, first_name, username, total_steps) in enumerate(rows, start=1):
-         name = first_name or "Без имени"
-         uname = f"@{username}" if username else "без username"
-         steps = f"{int(total_steps):,}".replace(",", " ")
-         lines.append(f"{idx}) {name} — {uname} — {steps}")
-
-    if my_rank is not None:
-        lines.append("")
-        lines.append(f"🏆 Твое место: {my_rank} / {total_users}")
-    return "\n".join(lines)
-
-def build_final_report_message() -> str:
-    date_from = CHALLENGE_START_DATE_MSK.isoformat()
-    date_to = CHALLENGE_END_DATE_MSK.isoformat()
-    total_days = (CHALLENGE_END_DATE_MSK - CHALLENGE_START_DATE_MSK).days + 1
-
-    top3 = database.get_top3_total(date_from, date_to)
-    max_day = database.get_max_day(date_from, date_to)
-    min_day = database.get_min_day_nonzero(date_from, date_to)
-    min_total_full = database.get_min_total_full_days(date_from, date_to, total_days)
-    total_steps, minus_count = database.get_summary_totals(date_from, date_to)
-    no_penalties_count = database.get_users_without_penalties(date_from, date_to)
-
-    avg_steps = int(total_steps / total_days) if total_days > 0 else 0
-    bank_rub = minus_count * DAILY_PENALTY_RUB
-    total_km = total_steps / 1000
-
-    def fmt_name(username, first_name):
-        if username:
-            return f"{first_name} — @{username}"
-        return f"{first_name}"
-
-    msg = []
-    msg.append("Финиш! Челлендж закрыт, и вот наши герои:\n")
-
-    for i, row in enumerate(top3, start=1):
-        username, first_name, total = row
-        msg.append(f"{i}) {fmt_name(username, first_name)} — {total}")
-
-    msg.append("")
-    msg.append("Номинации вечера:\n")
-
-    if max_day:
-        u, f, steps, _day = max_day
-        msg.append(f"🏎 Самый мощный день: {steps} шагов — {fmt_name(u, f)}")
-    if min_day:
-        u, f, steps, _day = min_day
-        msg.append(f"🐢 Самый скромный день: {steps} шагов — {fmt_name(u, f)}")
-    if min_total_full:
-        u, f, total = min_total_full
-        msg.append(f"🖤 Чёрная майка Джиро: {total} шагов — {fmt_name(u, f)}")
-
-    msg.append("")
-    msg.append("Итоги в цифрах:\n")
-    msg.append(f"👣 Всего шагов: {total_steps} (≈ {total_km:.1f} км)")
-    msg.append(f"📊 Среднее в день: {avg_steps}")
-    msg.append(f"💰 Общий банк: {bank_rub} ₽")
-    msg.append(f"🧼 Без штрафов: {no_penalties_count} человек")
-
-    return "\n".join(msg)
-
-def format_top50_message(rows) -> str:
-    header = "Топ‑50 за весь период:\n"
-    lines = [header]
-
-    for idx, (username, first_name, total_steps, avg_steps, minus_count) in enumerate(rows, start=1):
-        uname = f"@{username}" if username else "без username"
-        name = first_name or "Без имени"
-        penalty_rub = minus_count * DAILY_PENALTY_RUB
-        lines.append(f"{idx}) {uname} - {name} - {total_steps} - ({avg_steps}) - {penalty_rub} ₽")
-
-    return "\n".join(lines)
-
-def format_top10_penalties(rows) -> str:
-    header = "Топ‑10 штрафников сезона:\n"
-    lines = [header]
-
-    if not rows:
-        return header + "\nНикто не штрафился. Подозрительно идеально."
-
-    for idx, (username, first_name, minus_count) in enumerate(rows, start=1):
-        uname = f"@{username}" if username else "без username"
-        name = first_name or "Без имени"
-        penalty_rub = minus_count * DAILY_PENALTY_RUB
-        lines.append(f"{idx}) {uname} - {name} - {penalty_rub} ₽")
-
-    lines.append("")
-    lines.append("Уважаемые штрафники, в следующий раз — ноги в руки, а не штрафы в банк.")
-    return "\n".join(lines)
-
-def format_penalties_reminder(rows) -> str:
-    header = (
-        "Напоминание: пора закрыть штрафы и перевести сумму на сбор.\n"
-        "ВАЖНО: предыдущее сообщение не актуально, приносим извинения.\n\n"
-        "Ссылки:\n"
-        f"{FUNDRAISER_URL}\n\n"
-        f"{FUNDRAISER_URL_2}\n\n"
-        "Топ должников (по штрафам):\n"
-    )
-
-    if not rows:
-        return header + "\nНикто не штрафился. Легенды."
-
-    lines = [header]
-    for idx, (username, first_name, minus_count) in enumerate(rows, start=1):
-        uname = f"@{username}" if username else "без username"
-        name = first_name or "Без имени"
-        penalty_rub = minus_count * DAILY_PENALTY_RUB
-        lines.append(f"{idx}) {uname} - {name} - {penalty_rub} ₽")
-
-    return "\n".join(lines)
-
-         
 async def safe_send_message(bot, chat_id: int, text: str):
     try:
         await bot.send_message(chat_id=chat_id, text=text)
@@ -280,49 +244,43 @@ async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, tg_user_id: int) -> 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if today_msk() > REGISTRATION_DEADLINE_MSK:
         await update.message.reply_text(
-            "Регистрация закрыта с 4 марта 2026. Новых участников больше не принимаем."
+            "Регистрация на июньский челлендж закрыта. Новых участников больше не принимаем."
         )
         return
-    
+
     context.user_data["menu"] = "main"
     context.user_data["state"] = None
 
     long_text = (
         "👋 Добро пожаловать в Begogram Steps Challenge!\n\n"
         "Вот всё, что нужно знать, куда ТЫЫЫ попал(а). Располагайся, читай и шагай.\n\n"
-        "🗓 Когда: 1–31 марта\n"
+        "🗓 Когда: 1–30 июня\n"
         "🚶‍♂️ Что делать: проходить минимум 10 000 шагов в день.\n"
         "Да-да, любой способ движения: прогулки, пробежки, жизнь вне дивана — всё считается.\n\n"
         "🤖 Как участвовать:\n"
         "• каждый день до полуночи вносим шаги в бота;\n"
         "• бот напомнит, если забыл (он суровый, но справедливый);\n"
         "• ошибся или забыл — редактируем позже, всё честно.\n\n"
-        "💸 Штрафы:\n"
-        "– 100 ₽, если:\n"
-        "• меньше 10 000 шагов за день;\n"
-        "• шаги не внесены вовремя (даже если потом внесёшь).\n"
-        "❗ один штраф за день, не суммируется\n"
-        "❗ платить сразу не нужно — бот всё подсчитает сам\n\n"
+        "🚫 Штрафов больше нет.\n"
+        "Вместо них — выбытие из розыгрыша:\n"
+        "• выполнил норму — остаёшься в игре;\n"
+        "• не выполнил и нет бонуса «день отдыха» — выбываешь из розыгрыша.\n\n"
+        "🎟 Бонусы «день отдыха»:\n"
+        "• позволяют пропустить день без выбытия;\n"
+        "• если норма не выполнена, бонус списывается автоматически;\n"
+        "• сколько бонусов осталось — смотри в «Меню → Статистика → Мой статус».\n\n"
         "💰 Призовой фонд:\n"
-        "Все штрафы формируют банк месяца.\n"
-        "В конце марта он делится так:\n"
-        "🥇 1 место — 50%\n"
-        "🥈 2 место — 30%\n"
-        "🥉 3 место — 20%\n"
-        "Побеждают те, кто прошагал больше всех.\n\n"
-        "📊 Статистика:\n"
-        "– в любой момент можешь:\n"
-        "• проверить свой прогресс;\n"
-        "• увидеть лидеров;\n"
-        "• узнать размер банка;\n"
-        "• глянуть свои штрафные дни.\n\n"
+        "Делится между участниками, которые не пропустили ни одного дня (с учётом бонусов).\n"
+        "Выигрыш не зависит от того, кто прошагал больше — важно просто остаться в игре.\n\n"
+        "📊 В «Меню → Статистика»:\n"
+        "• Мой статус — в игре ты или выбыл, бонусы, стрик, дни до конца;\n"
+        "• Мои бонусы — история бонусов;\n"
+        "• Активные участники — кто ещё в игре.\n\n"
         "🤝 Важно:\n"
-        "• участие бесплатное;\n"
-        "• можно пройти месяц без штрафов;\n"
-        "• форс-мажоры бывают — пишешь Максиму или Илье, стараемся решить.\n\n"
-        "• Ты должен быть подписан на канал Вестника Бегограма"
+        "• форс-мажоры бывают — пишешь Максиму или Илье, стараемся решить;\n"
+        "• нужно быть подписанным на канал Вестника Бегограма.\n\n"
         "🚶‍♀️ И главное:\n"
-        "Шагаем, соревнуемся, двигаемся и кайфуем.\n"
+        "Шагаем, двигаемся и кайфуем.\n"
         "💪 Удачи — и да пребудут с тобой шаги!"
     )
 
@@ -383,12 +341,18 @@ async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             )
             return True
 
+        is_new = database.get_user_id(user.id) is None
         database.add_user(
             tg_id=user.id,
             username=user.username,
             first_name=user.first_name,
             club=None
         )
+        if is_new:
+            events.info(
+                "УЧАСТИЕ | tg_id=%s | %s | %s",
+                user.id, _uname(user), user.first_name or "без имени"
+            )
         context.user_data["state"] = "awaiting_club"
         await update.message.reply_text(
             "Прекрасно. Ты сделал(а) осознанный выбор.\n"
@@ -419,6 +383,10 @@ async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         else:
             database.update_user_club(user_id=user_id, club=club)
 
+        events.info(
+            "РЕГИСТРАЦИЯ | tg_id=%s | %s | клуб=%s",
+            user.id, _uname(user), club or "нет"
+        )
         context.user_data["state"] = None
         await update.message.reply_text(
             "Готово. Ты официально в игре 🫡\n"
@@ -428,20 +396,18 @@ async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             "— вводишь общее число шагов за день\n\n"
             "🎯 Цель\n"
             "— 10 000 шагов в день\n\n"
-            "💸 Штрафы\n"
-            "— меньше 10 000 -> +100 ₽\n"
-            "— не внёс шаги за день -> +100 ₽\n"
-            "— штраф один, но неизбежный\n\n"
+            "🎟 Не дотянул до нормы?\n"
+            "— если есть бонус «день отдыха», он спишется и день засчитается;\n"
+            "— если бонусов нет — выбываешь из розыгрыша.\n\n"
             "⏰ Забыл?\n"
-            "— бот напомнит вечером\n"
-            "— шаги можно внести позже\n"
-            "— но штраф за пропуск дня уже никуда не денется\n\n"
-            "📊 В «Меню» найдёшь:\n"
-            "— свою статистику\n"
-            "— штрафы\n"
-            "— отставание от лидера\n\n"
+            "— бот напомнит вечером в 22:00;\n"
+            "— шаги можно внести позже;\n"
+            "— но если день закроется без нормы и без бонуса — выбытие.\n\n"
+            "📊 В «Меню → Статистика»:\n"
+            "— Мой статус — статус, бонусы, стрик;\n"
+            "— Мои бонусы — история бонусов;\n"
+            "— Активные участники — кто ещё в игре.\n\n"
             "Всё честно. Всё считается.\n"
-            "Ходи. Считай. Страдай.\n\n"
             "Поехали 🚀",
             reply_markup=MAIN_KEYBOARD)
         return True
@@ -449,7 +415,16 @@ async def handle_join_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, t
     return False
 
 
+NAV_BUTTONS = {"Меню", "Назад", "Уведомления", "Статистика"}
+
+
 async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    # Любой переход по навигации отменяет незавершённый ввод шагов/даты,
+    # иначе «жду число» перехватывает кнопки статистики (handle_state идёт раньше).
+    if text in NAV_BUTTONS:
+        context.user_data["state"] = None
+        context.user_data["edit_date"] = None
+
     if text == "Меню":
         context.user_data["menu"] = "menu"
         await update.message.reply_text("Меню:", reply_markup=MENU_KEYBOARD)
@@ -486,7 +461,7 @@ async def handle_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             "🔕 Выключить уведомления\n"
             "Ты взрослый человек.\n"
             "Сам помнишь.\n"
-            "(или платишь штрафы, как взрослый).",
+            "(или выбываешь из розыгрыша, как взрослый).",
         reply_markup=kb)
         return True
 
@@ -525,45 +500,98 @@ async def handle_notifications(update: Update, context: ContextTypes.DEFAULT_TYP
     return False
 
 
+def build_status_text(user_id: int) -> str:
+    out = database.get_out_of_game(user_id)
+    bonus_balance = database.get_bonus_balance(user_id)
+    streak = current_streak(user_id)
+    left = days_left()
+
+    status_line = "🔴 Выбыл из розыгрыша" if out else "🟢 В игре"
+    return (
+        "Твой статус в челлендже:\n\n"
+        f"{status_line}\n"
+        f"🎟 Бонусов «день отдыха»: {bonus_balance}\n"
+        f"🔥 Стрик (дней нормы подряд): {streak}\n"
+        f"⏳ До конца челленджа: {left} дн."
+    )
+
+
+def build_bonuses_text(user_id: int) -> str:
+    bonus_balance = database.get_bonus_balance(user_id)
+    used_days = database.get_user_bonus_days(user_id)
+
+    lines = [
+        "Бонусы «день отдыха».\n",
+        f"Доступно сейчас: {bonus_balance}",
+    ]
+    if used_days:
+        lines.append("\nИспользованы:")
+        for day_iso, _steps in used_days:
+            day = datetime.date.fromisoformat(day_iso)
+            lines.append(f"• {day.strftime('%d.%m.%Y')}")
+    else:
+        lines.append("\nПока ни один бонус не использован.")
+    return "\n".join(lines)
+
+
+def build_leaders_text() -> str:
+    in_game = database.count_in_game()
+    out = database.count_out_of_game()
+
+    users = database.get_in_game_users()
+    ranked = sorted(
+        ((uid, username, first_name, current_streak(uid)) for uid, username, first_name in users),
+        key=lambda r: r[3],
+        reverse=True
+    )
+
+    lines = [
+        "Кто ещё в игре:\n",
+        f"🟢 В игре: {in_game}",
+        f"🔴 Выбыло: {out}\n",
+    ]
+    if not ranked:
+        lines.append("Активных участников пока нет.")
+        return "\n".join(lines)
+
+    lines.append("Активные участники (по стрику):")
+    for idx, (_uid, username, first_name, streak) in enumerate(ranked[:30], start=1):
+        name = first_name or "Без имени"
+        uname = f"@{username}" if username else "без username"
+        lines.append(f"{idx}) {name} — {uname} — 🔥 {streak}")
+    return "\n".join(lines)
+
+
 async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
-    if text == "Топ 20 все время":
-        user = update.effective_user
-        my_user_id = database.get_user_id(user.id)
-        if my_user_id is None:
-            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
-            return True
-        
-        rows = database.get_all_time_ranking()
-        my_rank, total_users = database.get_user_rank_and_total_users(my_user_id)
-        msg = format_all_time_ranking(rows, my_user_id, my_rank, total_users)
-        await update.message.reply_text(msg)
-        return True
-  
-    if text == "Топ 10 вчера":
-        user = update.effective_user
-        my_user_id = database.get_user_id(user.id)
-        if my_user_id is None:
-            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
-            return True
-        day = today_msk() - datetime.timedelta(days=1)
-        day_iso = day.isoformat()
-
-        rows = database.get_top10_for_day(day_iso)
-        my_rank, total_users = database.get_user_rank_for_day(day_iso, my_user_id)
-
-        msg = format_top10_yesterday(rows, day.strftime("%d.%m.%Y"), my_rank, total_users)
-        await update.message.reply_text(msg)
-        return True
-
-    if text == "Моя активность":
-        user = update.effective_user
-        user_id = database.get_user_id(user.id)
+    if text == "Мой статус":
+        user_id = database.get_user_id(update.effective_user.id)
         if user_id is None:
             await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
             return True
-        
-        total_steps, minus_count, avg_steps = database.get_user_activity_stats(user_id) # средние шаги, всего шагов
-        penalty_sum = minus_count * DAILY_PENALTY_RUB # сумма штрафа
+        await update.message.reply_text(build_status_text(user_id))
+        return True
+
+    if text == "Мои бонусы":
+        user_id = database.get_user_id(update.effective_user.id)
+        if user_id is None:
+            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
+            return True
+        await update.message.reply_text(build_bonuses_text(user_id))
+        return True
+
+    if text == "Активные участники":
+        await update.message.reply_text(build_leaders_text())
+        return True
+
+    if text == "Моя активность":
+        user_id = database.get_user_id(update.effective_user.id)
+        if user_id is None:
+            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
+            return True
+
+        total_steps, _minus_count, avg_steps = database.get_user_activity_stats(user_id)
+        bonus_balance = database.get_bonus_balance(user_id)
+        streak = current_streak(user_id)
 
         msg = (
             "Твоя активность. Личный отчёт. Без прикрас.\n\n"
@@ -571,52 +599,14 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             "(да, это реально много)\n\n"
             f"📈 Среднее за день:\n{avg_steps}\n"
             "крепкий, уверенный режим, без сюрпризов\n\n"
-            f"💸 Штрафы:\n{penalty_sum} ₽\n"
-            "не идеально, но и не позорно\n\n"
+            f"🔥 Стрик нормы подряд:\n{streak} дн.\n\n"
+            f"🎟 Бонусов «день отдыха»:\n{bonus_balance}\n"
+            "списываются при пропуске нормы\n\n"
             "Вывод:\n"
             "Ты не просто ходишь — ты системно изнашиваешь асфальт.\n"
-            "Пара осечек была, но в целом — достойно. Продолжай в том же духе."
+            "Главное — не пропусти день без бонуса. Продолжай в том же духе."
         )
         await update.message.reply_text(msg)
-        return True
-        
-
-    if text == "Отставание от лидера":
-        user = update.effective_user
-        user_id = database.get_user_id(user.id)
-        if user_id is None:
-            await update.message.reply_text("Сначала нажми «УЧАСТВУЮ»." )
-            return True
-        
-        leader, user_total = database.get_leader_and_user_total(user_id) #user total - шаги юзера leader - шаги лидера 
-        if leader is None:
-            await update.message.reply_text("Король пока не найден! Бери руки в ноги и бегом становиться первым лидером")
-            return True
-        
-        leader_user_id, leader_total = leader
-        leader_total = int(leader_total or 0)
-
-        if user_id == leader_user_id:
-            await update.message.reply_text("Вы и есть лидер! Сможете удержать этот титул ?)")
-            return True
-        
-        lag = leader_total - user_total # отставание от лидера 
-        await update.message.reply_text(
-            "Отставание от лидера. Дышишь ему в затылок.\n\n"
-            f"👣 Разрыв:\n{lag}\n"
-            "это буквально одна прогулка в кофейню.\n\n"
-            f"🏁 Лидер:\n{leader_total}\n"
-            "ходит так, будто ему за это платят.\n\n"
-            f"🚶‍♂️ Ты:\n{user_total}\n"
-            "почти там же, не расслабляйся\n\n"
-            "Вердикт:\n"
-            "Лидер ещё впереди, но уже нервно оглядывается.\n"
-            "Пара лишних кругов — и таблички поменяются местами."
-        )
-        return True
-
-    if text == "Банк":
-        await handle_bank(update, context)
         return True
 
     return False
@@ -653,7 +643,9 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         if current is not None:
             submitted_on_time = current[4]
 
-        result, reason = evaluate_result(submitted_on_time, steps)
+        result, reason, bonus_used, action, remaining = resolve_day_with_bonus(
+            user_id, submitted_on_time, steps, current
+        )
 
         database.upsert_daily_status(
             user_id=user_id,
@@ -661,15 +653,26 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
             steps_value=steps,
             submitted_on_time=submitted_on_time,
             result=result,
-            result_reason=reason
+            result_reason=reason,
+            bonus_used=bonus_used
         )
 
+        date_from, date_to = challenge_range()
+        database.recompute_out_of_game(user_id, date_from, date_to)
+
         logger.info(
-            "Шаги сохранены: user_id=%s, day=%s, steps=%s, result=%s, reason=%s",
-            user_id, day_str, steps, result, reason
+            "Шаги сохранены: user_id=%s, day=%s, steps=%s, result=%s, reason=%s, action=%s",
+            user_id, day_str, steps, result, reason, action
+        )
+        events.info(
+            "ШАГИ | tg_id=%s | %s | %s | шагов=%s | %s (%s) | действие=%s",
+            user.id, _uname(user), day_str, steps, result, reason, action
         )
         context.user_data["state"] = None
-        await update.message.reply_text("Записал.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(
+            bonus_reply_text(action, remaining),
+            reply_markup=MAIN_KEYBOARD
+        )
         return True
 
     if state == "awaiting_edit_date":
@@ -716,7 +719,9 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         else:
             submitted_on_time = current[4]
 
-        result, reason = evaluate_result(submitted_on_time, steps)
+        result, reason, bonus_used, action, remaining = resolve_day_with_bonus(
+            user_id, submitted_on_time, steps, current
+        )
 
         database.upsert_daily_status(
             user_id=user_id,
@@ -724,16 +729,27 @@ async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
             steps_value=steps,
             submitted_on_time=submitted_on_time,
             result=result,
-            result_reason=reason
+            result_reason=reason,
+            bonus_used=bonus_used
         )
 
+        date_from, date_to = challenge_range()
+        database.recompute_out_of_game(user_id, date_from, date_to)
+
         logger.info(
-            "Шаги сохранены (редакт): user_id=%s, day=%s, steps=%s, result=%s, reason=%s",
-            user_id, day_str, steps, result, reason
+            "Шаги сохранены (редакт): user_id=%s, day=%s, steps=%s, result=%s, reason=%s, action=%s",
+            user_id, day_str, steps, result, reason, action
+        )
+        events.info(
+            "ШАГИ (редакт) | tg_id=%s | %s | %s | шагов=%s | %s (%s) | действие=%s",
+            user.id, _uname(user), day_str, steps, result, reason, action
         )
         context.user_data["state"] = None
         context.user_data["edit_date"] = None
-        await update.message.reply_text("Сохранено.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(
+            bonus_reply_text(action, remaining),
+            reply_markup=MAIN_KEYBOARD
+        )
         return True
 
     return False
@@ -754,54 +770,6 @@ async def handle_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
 
     return False
 
-async def handle_bank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    user_id = database.get_user_id(user.id)
-    if user_id is None:
-        await update.message.reply_text("Сначала нажми «УЧАСТВУЮ».")
-        return
-
-    date_from = CHALLENGE_START_DATE_MSK.isoformat()
-    date_to = CHALLENGE_END_DATE_MSK.isoformat()
-
-    total_minus, user_minus = database.get_bank_stats(date_from, date_to, user_id)
-    total_bank = total_minus * DAILY_PENALTY_RUB
-    user_bank = user_minus * DAILY_PENALTY_RUB
-    user_pct = (user_bank / total_bank * 100) if total_bank > 0 else 0
-
-    msg = (
-        f"Общий банк: {total_bank} ₽\n"
-        f"Твой вклад: {user_bank} ₽ ({user_pct:.1f}%)"
-    )
-    await update.message.reply_text(msg)
-
-async def invite_chat_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
-    users = database.get_active_users()
-    text = (
-        "Ребята, хотим обсуждать результаты, ошибки, доработки и всё остальное "
-        "по челленджу в одном месте. Для этого сделали отдельный чат — очень "
-        f"просим всех туда вступить: {INVITE_CHAT_URL}"
-    )
-
-    for _, tg_id, _, _, _, _ in users:
-        await safe_send_message(context.bot, tg_id, text)
-
-async def fundraiser_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
-    users = database.get_active_users()
-    text = (
-        "ВАЖНО: ПРЕДЫДУЩИЕ ССЫЛКИ НЕДЕЙСТВИТЕЛЬНЫ\n\n"
-        "Наш замечательный челлендж подходит к концу. "
-        "Вы знаете сумму своих штрафов, а теперь ещё знаете ссылку на сбор, "
-        f"куда эту сумму можно перевести: {FUNDRAISER_URL}\n\n"
-        "Для вашего удобства ещё и Сбер сделали! "
-        f"тык: {FUNDRAISER_URL_2}"
-    )
-
-    for _, tg_id, _, _, _, _ in users:
-        await safe_send_message(context.bot, tg_id, text)
-
-
-
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     day = today_msk()
     if not is_within_challenge(day):
@@ -813,6 +781,8 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     for user_id, tg_id, username, first_name, club, notifications_enabled in users:
         if not notifications_enabled:
             continue
+        if database.get_out_of_game(user_id):
+            continue  # выбывшим напоминать незачем
 
         row = database.get_daily_status(user_id, day_str)
         if row is None:
@@ -822,6 +792,7 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
                     text=(
                         "Напоминание.\n"
                         "Шаги за сегодня сами себя не внесут.\n"
+                        "Не выполнишь норму и не останется бонусов — выбываешь из розыгрыша.\n"
                         "До 23:59 ещё можно спастись."
                     ),
                     reply_markup=MAIN_KEYBOARD
@@ -829,54 +800,53 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
             except TelegramError as e:
                 logger.warning("Send telegram error chat_id=%s err=%s", tg_id, e)
 
-async def final_report_job(context: ContextTypes.DEFAULT_TYPE):
-    text = build_final_report_message()
-    users = database.get_active_users()
-    for _, tg_id, _, _, _, _ in users:
-        await safe_send_message(context.bot, tg_id, text)
-
-           
-
 
 async def finalize_day_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    После полуночи разбираем вчерашний день для тех, кто не отправил шаги и ещё в игре:
+    есть бонус → списываем, день засчитан; бонуса нет → выбытие.
+    """
     day = today_msk() - datetime.timedelta(days=1)
     if not is_within_challenge(day):
         return
-    database.finalize_no_submission_for_day(day.isoformat())
 
-async def final_top50_job(context: ContextTypes.DEFAULT_TYPE):
-    date_from = CHALLENGE_START_DATE_MSK.isoformat()
-    date_to = CHALLENGE_END_DATE_MSK.isoformat()
-    total_days = (CHALLENGE_END_DATE_MSK - CHALLENGE_START_DATE_MSK).days + 1
+    day_str = day.isoformat()
+    date_from, date_to = challenge_range()
+    missing = database.get_users_missing_status_for_day(day_str)
 
-    rows = database.get_top50_all_time_stats(date_from, date_to, total_days)
-    text = format_top50_message(rows)
-
-    users = database.get_active_users()
-    for _, tg_id, _, _, _, _ in users:
-        await safe_send_message(context.bot, tg_id, text)
-
-async def final_top10_penalties_job(context: ContextTypes.DEFAULT_TYPE):
-    date_from = CHALLENGE_START_DATE_MSK.isoformat()
-    date_to = CHALLENGE_END_DATE_MSK.isoformat()
-
-    rows = database.get_top10_penalties(date_from, date_to)
-    text = format_top10_penalties(rows)
-
-    users = database.get_active_users()
-    for _, tg_id, _, _, _, _ in users:
-        await safe_send_message(context.bot, tg_id, text)
-
-async def penalties_reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    date_from = CHALLENGE_START_DATE_MSK.isoformat()
-    date_to = CHALLENGE_END_DATE_MSK.isoformat()
-
-    rows = database.get_top10_penalties(date_from, date_to)
-    text = format_penalties_reminder(rows)
-
-    users = database.get_active_users()
-    for _, tg_id, _, _, _, _ in users:
-        await safe_send_message(context.bot, tg_id, text)
+    for user_id, tg_id, bonus_balance in missing:
+        if bonus_balance > 0:
+            remaining = database.adjust_bonus_balance(user_id, -1)
+            database.upsert_daily_status(
+                user_id=user_id, day_msk=day_str, steps_value=0,
+                submitted_on_time=0, result="+", result_reason="bonus", bonus_used=1
+            )
+            database.recompute_out_of_game(user_id, date_from, date_to)
+            events.info(
+                "ПРОПУСК→БОНУС | tg_id=%s | %s | списан 1 бонус, осталось=%s",
+                tg_id, day_str, remaining
+            )
+            await safe_send_message(
+                context.bot, tg_id,
+                "Ты не отправил шаги за вчера, поэтому я списал 1 бонус «день отдыха» — "
+                f"день засчитан, ты в игре. Осталось бонусов: {remaining}."
+            )
+        else:
+            database.upsert_daily_status(
+                user_id=user_id, day_msk=day_str, steps_value=0,
+                submitted_on_time=0, result="-", result_reason="no_submission", bonus_used=0
+            )
+            database.recompute_out_of_game(user_id, date_from, date_to)
+            events.info(
+                "ВЫБЫТИЕ | tg_id=%s | %s | пропуск без бонуса",
+                tg_id, day_str
+            )
+            await safe_send_message(
+                context.bot, tg_id,
+                "Ты пропустил вчерашний день, и бонусов «день отдыха» не осталось.\n"
+                "К сожалению, ты выбыл из розыгрыша призового фонда. "
+                "Но можешь продолжать ходить для себя — в следующем месяце будет новый челлендж."
+            )
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -892,29 +862,6 @@ def main():
     logger.info("База данных инициализированна")
 
     app = Application.builder().token(TOKEN).build()
-    now = now_msk()
-
-    if now < INVITE_SEND_AT:
-        app.job_queue.run_once(invite_chat_broadcast_job, when=INVITE_SEND_AT)
-
-    if now < FUND_SEND_AT:
-        app.job_queue.run_once(fundraiser_broadcast_job, when=FUND_SEND_AT)
-
-    FINAL_REPORT_AT = datetime.datetime(2026, 4, 1, 7, 15, 0, tzinfo=MSK)
-    if now < FINAL_REPORT_AT:
-        app.job_queue.run_once(final_report_job, when=FINAL_REPORT_AT)
-
-    FINAL_TOP50_AT = datetime.datetime(2026, 4, 1, 7, 15, 15, tzinfo=MSK)
-    if now < FINAL_TOP50_AT:
-        app.job_queue.run_once(final_top50_job, when=FINAL_TOP50_AT)
-
-    FINAL_TOP10_PENALTIES_AT = datetime.datetime(2026, 4, 1, 7, 15, 30, tzinfo=MSK)
-    if now < FINAL_TOP10_PENALTIES_AT:
-        app.job_queue.run_once(final_top10_penalties_job, when=FINAL_TOP10_PENALTIES_AT)
-
-    PENALTIES_REMINDER_AT = datetime.datetime(2026, 4, 1, 22, 0, 0, tzinfo=MSK)
-    if now < PENALTIES_REMINDER_AT:
-        app.job_queue.run_once(penalties_reminder_job, when=PENALTIES_REMINDER_AT)
 
     app.job_queue.run_daily(
         reminder_job,

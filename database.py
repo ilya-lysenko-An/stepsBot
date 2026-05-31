@@ -21,7 +21,9 @@ def init_db():
                 first_name TEXT,
                 club TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1,
-                notifications_enabled INTEGER NOT NULL DEFAULT 1
+                notifications_enabled INTEGER NOT NULL DEFAULT 1,
+                bonus_balance INTEGER NOT NULL DEFAULT 0,  -- бонусы «день отдыха», заполняются вручную
+                out_of_game INTEGER NOT NULL DEFAULT 0     -- 1 = выбыл из розыгрыша
             );
         """)
 
@@ -34,8 +36,9 @@ def init_db():
                 submitted_on_time INTEGER NOT NULL DEFAULT 0, -- 0/1
                 result TEXT NOT NULL CHECK (result IN ('+', '-')),
                 result_reason TEXT NOT NULL CHECK (
-                    result_reason IN ('ok', 'late', 'lt_10k', 'no_submission')
+                    result_reason IN ('ok', 'late', 'lt_10k', 'no_submission', 'bonus')
                 ),
+                bonus_used INTEGER NOT NULL DEFAULT 0,     -- 0/1: был ли списан бонус за этот день
                 UNIQUE(user_id, day_msk),
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
@@ -99,6 +102,143 @@ def get_user_settings(tg_id: int):
         return row  # (notifications_enabled,) or None
 
 
+# ---------- бонусы «день отдыха» ----------
+
+def get_bonus_balance(user_id: int) -> int:
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT bonus_balance FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def set_bonus_balance(user_id: int, value: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET bonus_balance = ? WHERE id = ?",
+            (max(0, int(value)), user_id)
+        )
+        conn.commit()
+
+
+def adjust_bonus_balance(user_id: int, delta: int) -> int:
+    """Меняет баланс на delta (не опускаясь ниже 0). Возвращает новый баланс."""
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET bonus_balance = MAX(0, bonus_balance + ?) WHERE id = ?",
+            (int(delta), user_id)
+        )
+        conn.commit()
+        cur.execute("SELECT bonus_balance FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def get_user_bonus_days(user_id: int):
+    """Дни, за которые был списан бонус «день отдыха»."""
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT day_msk, steps_value
+            FROM daily_status
+            WHERE user_id = ? AND bonus_used = 1
+            ORDER BY day_msk
+        """, (user_id,))
+        return cur.fetchall()
+
+
+# ---------- выбытие из розыгрыша ----------
+
+def get_out_of_game(user_id: int) -> int:
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT out_of_game FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def set_out_of_game(user_id: int, value: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET out_of_game = ? WHERE id = ?",
+            (1 if value else 0, user_id)
+        )
+        conn.commit()
+
+
+def recompute_out_of_game(user_id: int, date_from: str, date_to: str) -> int:
+    """
+    Пересчитывает статус выбытия из дневных результатов.
+    Выбыл (1), если в периоде челленджа есть хоть один день с result = '-'
+    (норма не выполнена и не покрыта бонусом). Иначе — в игре (0).
+    Возвращает новый статус.
+    """
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM daily_status
+            WHERE user_id = ?
+              AND day_msk BETWEEN ? AND ?
+              AND result = '-'
+        """, (user_id, date_from, date_to))
+        has_violation = int(cur.fetchone()[0] or 0) > 0
+        out = 1 if has_violation else 0
+        cur.execute("UPDATE users SET out_of_game = ? WHERE id = ?", (out, user_id))
+        conn.commit()
+        return out
+
+
+def get_users_missing_status_for_day(day_msk: str):
+    """
+    Активные участники в игре, у которых нет записи за день.
+    Возвращает [(user_id, tg_id, bonus_balance), ...].
+    """
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.id, u.tg_id, u.bonus_balance
+            FROM users u
+            WHERE u.is_active = 1
+              AND u.out_of_game = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM daily_status d
+                  WHERE d.user_id = u.id AND d.day_msk = ?
+              )
+        """, (day_msk,))
+        return cur.fetchall()
+
+
+def count_in_game() -> int:
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users WHERE is_active = 1 AND out_of_game = 0")
+        return int(cur.fetchone()[0] or 0)
+
+
+def count_out_of_game() -> int:
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users WHERE is_active = 1 AND out_of_game = 1")
+        return int(cur.fetchone()[0] or 0)
+
+
+def get_in_game_users():
+    """Участники, ещё не выбывшие из розыгрыша: [(id, username, first_name), ...]."""
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, username, first_name
+            FROM users
+            WHERE is_active = 1 AND out_of_game = 0
+            ORDER BY id ASC
+        """)
+        return cur.fetchall()
+
+
 def get_active_users():
     with get_con() as conn:
         cur = conn.cursor()
@@ -116,7 +256,7 @@ def get_daily_status(user_id: int, day_msk: str):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, user_id, day_msk, steps_value, submitted_on_time, result, result_reason
+            SELECT id, user_id, day_msk, steps_value, submitted_on_time, result, result_reason, bonus_used
             FROM daily_status
             WHERE user_id = ? AND day_msk = ?
         """, (user_id, day_msk))
@@ -129,22 +269,24 @@ def upsert_daily_status(
     steps_value: int,
     submitted_on_time: int,
     result: str,
-    result_reason: str
+    result_reason: str,
+    bonus_used: int = 0
 ):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO daily_status (
-                user_id, day_msk, steps_value, submitted_on_time, result, result_reason
+                user_id, day_msk, steps_value, submitted_on_time, result, result_reason, bonus_used
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, day_msk)
             DO UPDATE SET
                 steps_value = excluded.steps_value,
                 submitted_on_time = excluded.submitted_on_time,
                 result = excluded.result,
-                result_reason = excluded.result_reason
-        """, (user_id, day_msk, steps_value, 1 if submitted_on_time else 0, result, result_reason))
+                result_reason = excluded.result_reason,
+                bonus_used = excluded.bonus_used
+        """, (user_id, day_msk, steps_value, 1 if submitted_on_time else 0, result, result_reason, 1 if bonus_used else 0))
         conn.commit()
 
 
