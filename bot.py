@@ -1,3 +1,5 @@
+from __future__ import annotations  # совместимость аннотаций с Python 3.8
+
 import logging
 from logging.handlers import RotatingFileHandler
 import datetime
@@ -13,7 +15,6 @@ from telegram import (
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.error import TimedOut, NetworkError, TelegramError
 from dotenv import load_dotenv
-from zoneinfo import ZoneInfo
 import os
 
 import database
@@ -56,7 +57,9 @@ logging.getLogger("httpx").setLevel(logging.ERROR)
 logging.getLogger("telegram").setLevel(logging.ERROR)
 logging.getLogger("apscheduler").setLevel(logging.ERROR)
 
-MSK = ZoneInfo("Europe/Moscow")
+# Москва — фиксированный UTC+3 (перевода часов в РФ нет с 2014 г.),
+# поэтому не зависим от zoneinfo/tzdata и работаем на любом Python.
+MSK = datetime.timezone(datetime.timedelta(hours=3), "MSK")
 
 REGISTRATION_DEADLINE_MSK = datetime.date(2026, 6, 3)
 CHALLENGE_START_DATE_MSK = datetime.date(2026, 6, 1)
