@@ -61,7 +61,7 @@ logging.getLogger("apscheduler").setLevel(logging.ERROR)
 # поэтому не зависим от zoneinfo/tzdata и работаем на любом Python.
 MSK = datetime.timezone(datetime.timedelta(hours=3), "MSK")
 
-REGISTRATION_DEADLINE_MSK = datetime.date(2026, 6, 3)
+REGISTRATION_DEADLINE_MSK = datetime.date(2026, 6, 30)
 CHALLENGE_START_DATE_MSK = datetime.date(2026, 6, 1)
 CHALLENGE_END_DATE_MSK = datetime.date(2026, 6, 30)
 DAILY_TARGET = 10_000
@@ -325,6 +325,12 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if await handle_stats_menu(update, context, text):
             return
+
+        # Ничего не подошло — написали текст/цифры без команды или кнопки
+        if text.strip().lower() == "хуй":
+            await update.message.reply_text("Богачев его уже тестирует")
+        else:
+            await update.message.reply_text("Забыл нажать на кнопку")
     except (TimedOut, NetworkError) as e:
         logger.warning("handle_menu timeout/network error: %s", e)
 
