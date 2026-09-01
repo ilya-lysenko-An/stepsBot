@@ -838,25 +838,6 @@ def get_top10_penalties(date_from: str, date_to: str):
 
 # ================= розыгрыш: кандидаты =================
 
-def count_participants_in_month(date_from: str, date_to: str) -> int:
-    """
-    Сколько человек участвовало в месяце — по наличию хотя бы одной записи шагов.
-
-    Раз участие означает оплату, это же и число оплат за месяц: по нему считается
-    банк розыгрыша. Выбывшие в этом месяце учитываются — они за него платили.
-    """
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT COUNT(DISTINCT d.user_id)
-            FROM daily_status d
-            JOIN users u ON u.id = d.user_id
-            WHERE u.is_active = 1
-              AND d.day_msk BETWEEN ? AND ?
-        """, (date_from, date_to))
-        return int(cur.fetchone()[0] or 0)
-
-
 def get_draw_candidates():
     """Все, кто дошёл до конца и не выбыл: [(user_id, tg_id, username, first_name), ...]."""
     with get_con() as conn:

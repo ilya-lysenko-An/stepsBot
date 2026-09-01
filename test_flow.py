@@ -189,7 +189,7 @@ async def main():
     ok("сегодняшний день закрыть нельзя",
        "не закончился" in u.message.replies[-1], u.message.replies[-1][:40])
 
-    print("\n=== 10. Розыгрыш: банк по числу участвовавших ===")
+    print("\n=== 10. Розыгрыш: банк = взнос × число участников ===")
     day(datetime.date(2026, 11, 30))
     for who in ("anna", "boris"):
         database.set_out_of_game(uid[who], 0)
@@ -199,10 +199,10 @@ async def main():
     u = FakeUpdate(admin)
     await bot.cmd_run_final_draw(u, FakeCtx())
     text = u.message.replies[-1]
-    sep = database.count_participants_in_month("2026-09-01", "2026-09-30")
-    ok("банк = 1000 × участников сентября", f"{sep * 1000} ₽" in text,
-       f"участников={sep}, ожидали {sep*1000} ₽")
-    ok("видно разбивку по месяцам", "Как посчитан банк" in text)
+    total = database.count_total_users()
+    ok("банк = 1000 × общее число участников", f"Банк: {total * 1000} ₽" in text,
+       f"участников={total}, ожидали {total * 1000} ₽")
+    ok("видно, как посчитан банк", f"1000 ₽ × {total}" in text)
 
     u = FakeUpdate(admin)
     await bot.cmd_run_final_draw(u, FakeCtx(["45000"]))

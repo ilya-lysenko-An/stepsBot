@@ -1185,20 +1185,15 @@ async def cmd_run_final_draw(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("Кандидатов нет: в игре не осталось никого.")
         return
 
-    # Участие в месяце = оплата за него, поэтому банк считаем по числу тех,
-    # кто в этом месяце хоть раз вносил шаги.
-    per_month = []
-    for month in config.ACTIVE_SEASONS:
-        s = config.season_by_name(month)
-        count = database.count_participants_in_month(s["date_from"], s["date_to"])
-        per_month.append((month, count, count * s["entry_fee"]))
-
-    computed_bank = sum(amount for _m, _c, amount in per_month)
+    # Раз участие означает оплату, банк — это взнос, умноженный на общее
+    # число участников челленджа, включая выбывших: они тоже платили.
+    total_people = database.count_total_users()
+    computed_bank = config.ENTRY_FEE * total_people
     bank = manual_bank if manual_bank is not None else computed_bank
 
     if bank <= 0:
         await update.message.reply_text(
-            "Банк получился нулевым — записей шагов за активные месяцы нет.\n"
+            "Банк получился нулевым — участников в базе нет.\n"
             "Задайте сумму вручную: /run_final_draw 45000"
         )
         return
@@ -1236,11 +1231,13 @@ async def cmd_run_final_draw(update: Update, context: ContextTypes.DEFAULT_TYPE)
                      f"банк поделён на {len(winners)}.")
     result_text = "\n".join(lines)
 
-    detail = ["", "Как посчитан банк:"]
-    for month, count, amount in per_month:
-        detail.append(f"• {config.MONTH_RU[month]}: {count} участников — {amount} ₽")
+    detail = [
+        "",
+        f"Как посчитан банк: {config.ENTRY_FEE} ₽ × {total_people} "
+        f"{phrases.people_word(total_people)} = {computed_bank} ₽.",
+    ]
     if manual_bank is not None:
-        detail.append(f"Расчётный банк {computed_bank} ₽ заменён вашим значением {bank} ₽.")
+        detail.append(f"Расчётное значение заменено вашим: {bank} ₽.")
     else:
         detail.append("Задать другую сумму: /run_final_draw <сумма>")
     if not broadcast:
