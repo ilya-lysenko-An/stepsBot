@@ -11,9 +11,17 @@ import os
 
 from dotenv import load_dotenv
 
+# Все файлы бота (token.env, steps.db, логи, картинка) лежат рядом с кодом.
+# Привязываемся к каталогу модуля, а не к текущей рабочей папке: иначе запуск
+# из другого места молча создал бы пустую базу вместо боевой.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def path(name: str) -> str:
+    return os.path.join(BASE_DIR, name)
+
 # Конфиг читает переменные окружения на импорте, поэтому .env грузим здесь,
 # а не в bot.py — иначе константы оплаты собрались бы из пустого окружения.
-load_dotenv("token.env")
+load_dotenv(path("token.env"))
 
 # Москва — фиксированный UTC+3 (перевода часов в РФ нет с 2014 г.).
 MSK = datetime.timezone(datetime.timedelta(hours=3), "MSK")

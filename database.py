@@ -2,7 +2,7 @@ import sqlite3
 
 import config
 
-DB_PATH = "steps.db"
+DB_PATH = config.path("steps.db")
 
 
 def get_con():

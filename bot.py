@@ -7,7 +7,6 @@ import random
 from datetime import time
 from logging.handlers import RotatingFileHandler
 
-from dotenv import load_dotenv
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -22,7 +21,7 @@ import config
 import database
 import phrases
 
-load_dotenv("token.env")
+# token.env уже загружен в config (по пути рядом с кодом), здесь только читаем.
 TOKEN = os.getenv("BOT_TOKEN")
 
 logging.basicConfig(
@@ -34,7 +33,7 @@ logger.setLevel(logging.INFO)
 
 # Технические логи (ошибки/предупреждения/инфо) — в файл с ротацией, чтобы переживали перезапуск.
 _bot_file_handler = RotatingFileHandler(
-    "bot.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8"
+    config.path("bot.log"), maxBytes=5_000_000, backupCount=5, encoding="utf-8"
 )
 _bot_file_handler.setLevel(logging.INFO)
 _bot_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -45,7 +44,7 @@ events = logging.getLogger("events")
 events.setLevel(logging.INFO)
 events.propagate = False  # не дублировать в консоль/технический лог
 _events_file_handler = RotatingFileHandler(
-    "events.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8"
+    config.path("events.log"), maxBytes=5_000_000, backupCount=5, encoding="utf-8"
 )
 _events_file_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
 events.addHandler(_events_file_handler)
@@ -524,7 +523,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        with open("welcome.jpg", "rb") as photo:
+        with open(config.path("welcome.jpg"), "rb") as photo:
             await update.message.reply_photo(photo=photo)
         await update.message.reply_text(text=long_text, reply_markup=JOIN_KEYBOARD)
     except FileNotFoundError:
