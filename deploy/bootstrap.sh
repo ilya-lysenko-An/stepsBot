@@ -16,8 +16,30 @@ fi
 
 say "1/6 Пакеты"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip git sqlite3
+PKGS="python3 python3-venv python3-pip git sqlite3"
+
+have_all() {
+    for b in python3 git sqlite3; do
+        command -v "$b" >/dev/null 2>&1 || return 1
+    done
+    python3 -c 'import venv' >/dev/null 2>&1 || return 1
+    return 0
+}
+
+if [ "${SKIP_APT:-0}" = "1" ]; then
+    echo "пропускаю по SKIP_APT=1"
+elif apt-get -o DPkg::Lock::Timeout=300 update -qq \
+     && apt-get -o DPkg::Lock::Timeout=300 install -y -qq $PKGS; then
+    echo "пакеты на месте"
+elif have_all; then
+    # apt мог не отработать из-за фонового unattended-upgrades, держащего блокировку.
+    # Всё нужное уже установлено, поэтому продолжаем.
+    echo "ВНИМАНИЕ: apt отработал с ошибкой, но python3, venv, git и sqlite3 в системе есть — продолжаю."
+else
+    echo "apt не отработал, и нужных пакетов в системе нет. Установите вручную:" >&2
+    echo "  apt-get install -y $PKGS" >&2
+    exit 1
+fi
 
 say "2/6 Пользователь и каталог"
 id -u "$USER_NAME" >/dev/null 2>&1 || \
