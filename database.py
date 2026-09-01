@@ -1,5 +1,7 @@
 import sqlite3
 
+import config
+
 DB_PATH = "steps.db"
 
 
@@ -44,10 +46,113 @@ def init_db():
             );
         """)
 
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS seasons (
+                name TEXT PRIMARY KEY,
+                type TEXT NOT NULL CHECK (type IN ('passive', 'active')),
+                date_from TEXT NOT NULL,
+                date_to TEXT NOT NULL,
+                daily_goal INTEGER NOT NULL DEFAULT 0,
+                passive_avg_threshold INTEGER NOT NULL DEFAULT 0,
+                entry_fee INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+
+        # История начислений и списаний бонусов — для /bonuses и для отката.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bonus_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                delta INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                day_msk TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
+
+        # Журнал действий организатора (оплаты, выбытия, бонусы) — п.4 ТЗ.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS admin_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_tg_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target_user_id INTEGER,
+                details TEXT,
+                created_at TEXT NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS draw_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                bank INTEGER NOT NULL,
+                organizer_share INTEGER NOT NULL,
+                winner_share INTEGER NOT NULL,
+                winners TEXT NOT NULL
+            );
+        """)
+
         cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_status_day ON daily_status(day_msk);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_status_user_day ON daily_status(user_id, day_msk);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_status_result ON daily_status(result);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bonus_log_user ON bonus_log(user_id);")
+
+        _migrate(cur)
+        _seed_seasons(cur)
         conn.commit()
+
+
+def _column_names(cur, table: str):
+    cur.execute("PRAGMA table_info({})".format(table))
+    return {row[1] for row in cur.fetchall()}
+
+
+def _migrate(cur):
+    """Идемпотентно доводит боевую базу до актуальной схемы."""
+    user_cols = _column_names(cur, "users")
+    for column, ddl in (
+        ("paid_september", "INTEGER NOT NULL DEFAULT 0"),
+        ("paid_october", "INTEGER NOT NULL DEFAULT 0"),
+        ("paid_november", "INTEGER NOT NULL DEFAULT 0"),
+        # причина выбытия: NULL | 'violation' | 'unpaid' | 'manual'
+        ("out_reason", "TEXT"),
+        ("reminder_time", "TEXT NOT NULL DEFAULT '22:00'"),
+    ):
+        if column not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN {} {}".format(column, ddl))
+
+    day_cols = _column_names(cur, "daily_status")
+    for column, ddl in (
+        ("violation", "INTEGER NOT NULL DEFAULT 0"),
+        ("season", "TEXT"),
+    ):
+        if column not in day_cols:
+            cur.execute("ALTER TABLE daily_status ADD COLUMN {} {}".format(column, ddl))
+
+
+def _seed_seasons(cur):
+    """Заливает сезоны из config.SEASONS (перезаписывает параметры при изменении конфига)."""
+    for s in config.SEASONS:
+        cur.execute("""
+            INSERT INTO seasons (name, type, date_from, date_to, daily_goal, passive_avg_threshold, entry_fee)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                type = excluded.type,
+                date_from = excluded.date_from,
+                date_to = excluded.date_to,
+                daily_goal = excluded.daily_goal,
+                passive_avg_threshold = excluded.passive_avg_threshold,
+                entry_fee = excluded.entry_fee
+        """, (
+            s["name"], s["type"], s["date_from"], s["date_to"],
+            s["daily_goal"], s["passive_avg_threshold"], s["entry_fee"],
+        ))
+
+
+def _now_iso() -> str:
+    return config.now_msk().isoformat(timespec="seconds")
 
 
 def add_user(tg_id: int, username: str = None, first_name: str = None, club: str = None):
@@ -122,18 +227,53 @@ def set_bonus_balance(user_id: int, value: int):
         conn.commit()
 
 
-def adjust_bonus_balance(user_id: int, delta: int) -> int:
-    """Меняет баланс на delta (не опускаясь ниже 0). Возвращает новый баланс."""
+def adjust_bonus_balance(user_id: int, delta: int, reason: str = None, day_msk: str = None) -> int:
+    """Меняет баланс на delta (не опускаясь ниже 0). Возвращает новый баланс.
+
+    Если передан reason — движение попадает в bonus_log (история для /bonuses).
+    В лог пишется фактическая дельта: попытка списать больше, чем есть, урежется.
+    """
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT bonus_balance FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        if row is None:
+            return 0
+        before = int(row[0])
+        after = max(0, before + int(delta))
+        cur.execute("UPDATE users SET bonus_balance = ? WHERE id = ?", (after, user_id))
+        if reason and after != before:
+            cur.execute("""
+                INSERT INTO bonus_log (user_id, delta, reason, day_msk, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, after - before, reason, day_msk, _now_iso()))
+        conn.commit()
+        return after
+
+
+def get_bonus_log(user_id: int, limit: int = 50):
+    """История начислений и списаний: [(delta, reason, day_msk, created_at), ...]."""
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT delta, reason, day_msk, created_at
+            FROM bonus_log
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (user_id, limit))
+        return cur.fetchall()
+
+
+def has_bonus_reason(user_id: int, reason: str) -> bool:
+    """Был ли уже начислен бонус с такой причиной (защита от двойного начисления)."""
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE users SET bonus_balance = MAX(0, bonus_balance + ?) WHERE id = ?",
-            (int(delta), user_id)
+            "SELECT 1 FROM bonus_log WHERE user_id = ? AND reason = ? LIMIT 1",
+            (user_id, reason)
         )
-        conn.commit()
-        cur.execute("SELECT bonus_balance FROM users WHERE id = ?", (user_id,))
-        row = cur.fetchone()
-        return int(row[0]) if row else 0
+        return cur.fetchone() is not None
 
 
 def get_user_bonus_days(user_id: int):
@@ -159,44 +299,77 @@ def get_out_of_game(user_id: int) -> int:
         return int(row[0]) if row else 0
 
 
-def set_out_of_game(user_id: int, value: int):
+def set_out_of_game(user_id: int, value: int, reason: str = None):
+    """reason: 'violation' | 'unpaid' | 'manual'. При возврате в игру причина сбрасывается."""
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE users SET out_of_game = ? WHERE id = ?",
-            (1 if value else 0, user_id)
+            "UPDATE users SET out_of_game = ?, out_reason = ? WHERE id = ?",
+            (1 if value else 0, reason if value else None, user_id)
         )
         conn.commit()
 
 
-def recompute_out_of_game(user_id: int, date_from: str, date_to: str) -> int:
+def get_out_state(user_id: int):
+    """(out_of_game, out_reason)."""
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT out_of_game, out_reason FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        return (int(row[0]), row[1]) if row else (0, None)
+
+
+def recompute_out_of_game(user_id: int) -> int:
     """
-    Пересчитывает статус выбытия из дневных результатов.
-    Выбыл (1), если в периоде челленджа есть хоть один день с result = '-'
-    (норма не выполнена и не покрыта бонусом). Иначе — в игре (0).
+    Пересчитывает выбытие по дневным результатам активных месяцев.
+
+    Ручное выбытие ('manual') и выбытие за неоплату ('unpaid') не трогаем —
+    их снимает только организатор через /unset_out. Пересчитываем только
+    выбытие за нарушение, чтобы правка шагов задним числом могла вернуть в игру.
     Возвращает новый статус.
     """
     with get_con() as conn:
         cur = conn.cursor()
+        cur.execute("SELECT out_of_game, out_reason FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        if row is None:
+            return 0
+        out_now, reason = int(row[0]), row[1]
+        if out_now and reason in ("manual", "unpaid"):
+            return 1
+
         cur.execute("""
             SELECT COUNT(*)
-            FROM daily_status
-            WHERE user_id = ?
-              AND day_msk BETWEEN ? AND ?
-              AND result = '-'
-        """, (user_id, date_from, date_to))
+            FROM daily_status d
+            JOIN seasons s
+              ON s.type = 'active'
+             AND d.day_msk BETWEEN s.date_from AND s.date_to
+            WHERE d.user_id = ?
+              AND d.result = '-'
+        """, (user_id,))
         has_violation = int(cur.fetchone()[0] or 0) > 0
+
         out = 1 if has_violation else 0
-        cur.execute("UPDATE users SET out_of_game = ? WHERE id = ?", (out, user_id))
+        cur.execute(
+            "UPDATE users SET out_of_game = ?, out_reason = ? WHERE id = ?",
+            (out, "violation" if out else None, user_id)
+        )
         conn.commit()
         return out
 
 
-def get_users_missing_status_for_day(day_msk: str):
+def get_users_missing_status_for_day(day_msk: str, season_name: str = None):
     """
-    Активные участники в игре, у которых нет записи за день.
+    Участники, допущенные к дню, у которых нет записи за этот день.
+
+    Для активного месяца допуск = оплачен этот месяц и нет выбытия.
     Возвращает [(user_id, tg_id, bonus_balance), ...].
     """
+    paid_filter = ""
+    if season_name in config.PAID_COLUMN:
+        # имя колонки берётся из белого списка config.PAID_COLUMN, подстановка безопасна
+        paid_filter = " AND u.{} = 1".format(config.PAID_COLUMN[season_name])
+
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
@@ -204,11 +377,12 @@ def get_users_missing_status_for_day(day_msk: str):
             FROM users u
             WHERE u.is_active = 1
               AND u.out_of_game = 0
+              {}
               AND NOT EXISTS (
                   SELECT 1 FROM daily_status d
                   WHERE d.user_id = u.id AND d.day_msk = ?
               )
-        """, (day_msk,))
+        """.format(paid_filter), (day_msk,))
         return cur.fetchall()
 
 
@@ -227,11 +401,11 @@ def count_out_of_game() -> int:
 
 
 def get_in_game_users():
-    """Участники, ещё не выбывшие из розыгрыша: [(id, username, first_name), ...]."""
+    """Участники, ещё не выбывшие из розыгрыша: [(id, tg_id, username, first_name), ...]."""
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, username, first_name
+            SELECT id, tg_id, username, first_name
             FROM users
             WHERE is_active = 1 AND out_of_game = 0
             ORDER BY id ASC
@@ -270,43 +444,31 @@ def upsert_daily_status(
     submitted_on_time: int,
     result: str,
     result_reason: str,
-    bonus_used: int = 0
+    bonus_used: int = 0,
+    violation: int = 0,
+    season: str = None
 ):
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO daily_status (
-                user_id, day_msk, steps_value, submitted_on_time, result, result_reason, bonus_used
+                user_id, day_msk, steps_value, submitted_on_time,
+                result, result_reason, bonus_used, violation, season
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, day_msk)
             DO UPDATE SET
                 steps_value = excluded.steps_value,
                 submitted_on_time = excluded.submitted_on_time,
                 result = excluded.result,
                 result_reason = excluded.result_reason,
-                bonus_used = excluded.bonus_used
-        """, (user_id, day_msk, steps_value, 1 if submitted_on_time else 0, result, result_reason, 1 if bonus_used else 0))
-        conn.commit()
-
-
-def finalize_no_submission_for_day(day_msk: str):
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO daily_status (
-                user_id, day_msk, steps_value, submitted_on_time, result, result_reason
-            )
-            SELECT
-                u.id, ?, 0, 0, '-', 'no_submission'
-            FROM users u
-            WHERE u.is_active = 1
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM daily_status d
-                  WHERE d.user_id = u.id AND d.day_msk = ?
-              )
-        """, (day_msk, day_msk))
+                bonus_used = excluded.bonus_used,
+                violation = excluded.violation,
+                season = excluded.season
+        """, (
+            user_id, day_msk, steps_value, 1 if submitted_on_time else 0,
+            result, result_reason, 1 if bonus_used else 0, 1 if violation else 0, season
+        ))
         conn.commit()
 
 
@@ -673,3 +835,294 @@ def get_top10_penalties(date_from: str, date_to: str):
         """, (date_from, date_to))
         return cur.fetchall()
 
+
+
+# ================= оплаты активных месяцев =================
+
+def _paid_column(month: str) -> str:
+    column = config.PAID_COLUMN.get(month)
+    if column is None:
+        raise ValueError("Неизвестный активный месяц: {}".format(month))
+    return column
+
+
+def set_payment(user_id: int, month: str, paid: int):
+    column = _paid_column(month)  # белый список, подстановка безопасна
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET {} = ? WHERE id = ?".format(column),
+            (1 if paid else 0, user_id)
+        )
+        conn.commit()
+
+
+def get_payment(user_id: int, month: str) -> int:
+    column = _paid_column(month)
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT {} FROM users WHERE id = ?".format(column), (user_id,))
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def get_payments(user_id: int):
+    """{'september': 0/1, 'october': 0/1, 'november': 0/1}."""
+    columns = [config.PAID_COLUMN[m] for m in config.ACTIVE_SEASONS]
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT {} FROM users WHERE id = ?".format(", ".join(columns)),
+            (user_id,)
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {m: 0 for m in config.ACTIVE_SEASONS}
+        return {m: int(v) for m, v in zip(config.ACTIVE_SEASONS, row)}
+
+
+def count_paid(month: str) -> int:
+    column = _paid_column(month)
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM users WHERE is_active = 1 AND {} = 1".format(column)
+        )
+        return int(cur.fetchone()[0] or 0)
+
+
+def get_unpaid_in_game_users(month: str):
+    """Кто ещё в игре, но не оплатил месяц: [(user_id, tg_id, username, first_name), ...]."""
+    column = _paid_column(month)
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, tg_id, username, first_name
+            FROM users
+            WHERE is_active = 1
+              AND out_of_game = 0
+              AND {} = 0
+            ORDER BY id
+        """.format(column))
+        return cur.fetchall()
+
+
+def get_draw_candidates():
+    """
+    Кандидаты в розыгрыш: [(user_id, tg_id, username, first_name), ...].
+
+    По умолчанию (REQUIRE_PAYMENT = False) — все, кто не выбыл.
+    Если допуск по оплате включён — дополнительно нужны отметки за все активные месяцы.
+    """
+    where = ["is_active = 1", "out_of_game = 0"]
+    if config.REQUIRE_PAYMENT:
+        where += ["{} = 1".format(config.PAID_COLUMN[m]) for m in config.ACTIVE_SEASONS]
+
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, tg_id, username, first_name
+            FROM users
+            WHERE {}
+            ORDER BY id
+        """.format(" AND ".join(where)))
+        return cur.fetchall()
+
+
+# ================= сезоны =================
+
+def get_season(name: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT name, type, date_from, date_to, daily_goal, passive_avg_threshold, entry_fee
+            FROM seasons WHERE name = ?
+        """, (name,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        keys = ("name", "type", "date_from", "date_to",
+                "daily_goal", "passive_avg_threshold", "entry_fee")
+        return dict(zip(keys, row))
+
+
+def get_season_avg(user_id: int, date_from: str, date_to: str):
+    """(среднее шагов за день, число записанных дней) в периоде."""
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COALESCE(AVG(steps_value), 0), COUNT(*)
+            FROM daily_status
+            WHERE user_id = ? AND day_msk BETWEEN ? AND ?
+        """, (user_id, date_from, date_to))
+        row = cur.fetchone()
+        return int(row[0] or 0), int(row[1] or 0)
+
+
+def get_today_steps(user_id: int, day_msk: str) -> int:
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT steps_value FROM daily_status WHERE user_id = ? AND day_msk = ?",
+            (user_id, day_msk)
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+# ================= напоминания =================
+
+def set_reminder_time(user_id: int, hhmm: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET reminder_time = ? WHERE id = ?", (hhmm, user_id))
+        conn.commit()
+
+
+def get_reminder_time(user_id: int) -> str:
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT reminder_time FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        return row[0] if row and row[0] else "22:00"
+
+
+def get_users_for_reminder(hhmm: str):
+    """Кому пора слать вечернее напоминание: [(user_id, tg_id, bonus_balance), ...]."""
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, tg_id, bonus_balance
+            FROM users
+            WHERE is_active = 1
+              AND notifications_enabled = 1
+              AND out_of_game = 0
+              AND COALESCE(reminder_time, '22:00') = ?
+        """, (hhmm,))
+        return cur.fetchall()
+
+
+# ================= поиск участника для админ-команд =================
+
+def find_user(ref: str):
+    """
+    Находит участника по @username, telegram_id или внутреннему id.
+    Возвращает (user_id, tg_id, username, first_name) или None.
+    """
+    ref = (ref or "").strip()
+    if not ref:
+        return None
+
+    with get_con() as conn:
+        cur = conn.cursor()
+        if ref.startswith("@"):
+            cur.execute("""
+                SELECT id, tg_id, username, first_name FROM users
+                WHERE lower(username) = lower(?)
+            """, (ref[1:],))
+            return cur.fetchone()
+
+        if ref.isdigit():
+            value = int(ref)
+            cur.execute("""
+                SELECT id, tg_id, username, first_name FROM users WHERE tg_id = ?
+            """, (value,))
+            row = cur.fetchone()
+            if row:
+                return row
+            cur.execute("""
+                SELECT id, tg_id, username, first_name FROM users WHERE id = ?
+            """, (value,))
+            return cur.fetchone()
+
+        cur.execute("""
+            SELECT id, tg_id, username, first_name FROM users
+            WHERE lower(username) = lower(?)
+        """, (ref,))
+        return cur.fetchone()
+
+
+def get_user_row(user_id: int):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, tg_id, username, first_name, bonus_balance, out_of_game, out_reason
+            FROM users WHERE id = ?
+        """, (user_id,))
+        return cur.fetchone()
+
+
+# ================= журнал действий организатора =================
+
+def log_admin_action(admin_tg_id: int, action: str, target_user_id: int = None, details: str = None):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO admin_log (admin_tg_id, action, target_user_id, details, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (admin_tg_id, action, target_user_id, details, _now_iso()))
+        conn.commit()
+
+
+def get_admin_log(limit: int = 30):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT created_at, admin_tg_id, action, target_user_id, details
+            FROM admin_log ORDER BY id DESC LIMIT ?
+        """, (limit,))
+        return cur.fetchall()
+
+
+# ================= общая статистика =================
+
+def count_total_users() -> int:
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users WHERE is_active = 1")
+        return int(cur.fetchone()[0] or 0)
+
+
+def get_stats_all():
+    """Сводка для /stats_all: всего / в игре / выбыло / оплаты по месяцам / причины выбытия."""
+    total = count_total_users()
+    in_game = count_in_game()
+    out = count_out_of_game()
+    paid = {m: count_paid(m) for m in config.ACTIVE_SEASONS}
+
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COALESCE(out_reason, 'unknown'), COUNT(*)
+            FROM users
+            WHERE is_active = 1 AND out_of_game = 1
+            GROUP BY 1
+        """)
+        reasons = dict(cur.fetchall())
+
+    return {
+        "total": total, "in_game": in_game, "out": out,
+        "paid": paid, "out_reasons": reasons,
+    }
+
+
+# ================= розыгрыш =================
+
+def save_draw_result(bank: int, organizer_share: int, winner_share: int, winners: str):
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO draw_results (created_at, bank, organizer_share, winner_share, winners)
+            VALUES (?, ?, ?, ?, ?)
+        """, (_now_iso(), bank, organizer_share, winner_share, winners))
+        conn.commit()
+
+
+def get_last_draw():
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT created_at, bank, organizer_share, winner_share, winners
+            FROM draw_results ORDER BY id DESC LIMIT 1
+        """)
+        return cur.fetchone()

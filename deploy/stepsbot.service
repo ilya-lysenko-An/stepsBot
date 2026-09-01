@@ -1,0 +1,25 @@
+[Unit]
+Description=Begogram Steps Challenge bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stepsbot
+Group=stepsbot
+WorkingDirectory=/opt/stepsbot
+# Бот ищет token.env, steps.db, welcome.jpg и пишет логи относительно WorkingDirectory.
+ExecStart=/opt/stepsbot/venv/bin/python -u bot.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+# Немного изоляции: писать бот должен только в свой каталог.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/stepsbot
+
+[Install]
+WantedBy=multi-user.target
