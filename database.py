@@ -113,10 +113,7 @@ def _migrate(cur):
     """Идемпотентно доводит боевую базу до актуальной схемы."""
     user_cols = _column_names(cur, "users")
     for column, ddl in (
-        ("paid_september", "INTEGER NOT NULL DEFAULT 0"),
-        ("paid_october", "INTEGER NOT NULL DEFAULT 0"),
-        ("paid_november", "INTEGER NOT NULL DEFAULT 0"),
-        # причина выбытия: NULL | 'violation' | 'unpaid' | 'manual'
+        # причина выбытия: NULL | 'violation' | 'manual'
         ("out_reason", "TEXT"),
         ("reminder_time", "TEXT NOT NULL DEFAULT '22:00'"),
     ):
@@ -300,7 +297,7 @@ def get_out_of_game(user_id: int) -> int:
 
 
 def set_out_of_game(user_id: int, value: int, reason: str = None):
-    """reason: 'violation' | 'unpaid' | 'manual'. При возврате в игру причина сбрасывается."""
+    """reason: 'violation' | 'manual'. При возврате в игру причина сбрасывается."""
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -323,9 +320,9 @@ def recompute_out_of_game(user_id: int) -> int:
     """
     Пересчитывает выбытие по дневным результатам активных месяцев.
 
-    Ручное выбытие ('manual') и выбытие за неоплату ('unpaid') не трогаем —
-    их снимает только организатор через /unset_out. Пересчитываем только
-    выбытие за нарушение, чтобы правка шагов задним числом могла вернуть в игру.
+    Ручное выбытие ('manual') не трогаем — его снимает только организатор через
+    /unset_out. Пересчитываем только выбытие за нарушение, чтобы правка шагов
+    задним числом могла вернуть человека в игру.
     Возвращает новый статус.
     """
     with get_con() as conn:
@@ -335,9 +332,12 @@ def recompute_out_of_game(user_id: int) -> int:
         if row is None:
             return 0
         out_now, reason = int(row[0]), row[1]
-        if out_now and reason in ("manual", "unpaid"):
+        if out_now and reason == "manual":
             return 1
 
+        # Сегодняшний день ещё не закрыт: у человека есть время дошагать,
+        # поэтому промежуточный минус за сегодня выбытием не считается.
+        today = config.today_msk().isoformat()
         cur.execute("""
             SELECT COUNT(*)
             FROM daily_status d
@@ -345,8 +345,9 @@ def recompute_out_of_game(user_id: int) -> int:
               ON s.type = 'active'
              AND d.day_msk BETWEEN s.date_from AND s.date_to
             WHERE d.user_id = ?
+              AND d.day_msk < ?
               AND d.result = '-'
-        """, (user_id,))
+        """, (user_id, today))
         has_violation = int(cur.fetchone()[0] or 0) > 0
 
         out = 1 if has_violation else 0
@@ -358,31 +359,29 @@ def recompute_out_of_game(user_id: int) -> int:
         return out
 
 
-def get_users_missing_status_for_day(day_msk: str, season_name: str = None):
+def get_users_for_day_check(day_msk: str):
     """
-    Участники, допущенные к дню, у которых нет записи за этот день.
+    Все участники, которых нужно проверить при закрытии дня.
 
-    Для активного месяца допуск = оплачен этот месяц и нет выбытия.
-    Возвращает [(user_id, tg_id, bonus_balance), ...].
+    Возвращает [(user_id, tg_id, bonus_balance, steps_value, has_record, bonus_used), ...].
+    Выбывшие не попадают: их статус уже не меняется.
     """
-    paid_filter = ""
-    if season_name in config.PAID_COLUMN:
-        # имя колонки берётся из белого списка config.PAID_COLUMN, подстановка безопасна
-        paid_filter = " AND u.{} = 1".format(config.PAID_COLUMN[season_name])
-
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
-            SELECT u.id, u.tg_id, u.bonus_balance
+            SELECT
+                u.id,
+                u.tg_id,
+                u.bonus_balance,
+                COALESCE(d.steps_value, 0),
+                CASE WHEN d.id IS NULL THEN 0 ELSE 1 END,
+                COALESCE(d.bonus_used, 0)
             FROM users u
+            LEFT JOIN daily_status d
+                ON d.user_id = u.id AND d.day_msk = ?
             WHERE u.is_active = 1
               AND u.out_of_game = 0
-              {}
-              AND NOT EXISTS (
-                  SELECT 1 FROM daily_status d
-                  WHERE d.user_id = u.id AND d.day_msk = ?
-              )
-        """.format(paid_filter), (day_msk,))
+        """, (day_msk,))
         return cur.fetchall()
 
 
@@ -837,95 +836,37 @@ def get_top10_penalties(date_from: str, date_to: str):
 
 
 
-# ================= оплаты активных месяцев =================
+# ================= розыгрыш: кандидаты =================
 
-def _paid_column(month: str) -> str:
-    column = config.PAID_COLUMN.get(month)
-    if column is None:
-        raise ValueError("Неизвестный активный месяц: {}".format(month))
-    return column
+def count_participants_in_month(date_from: str, date_to: str) -> int:
+    """
+    Сколько человек участвовало в месяце — по наличию хотя бы одной записи шагов.
 
-
-def set_payment(user_id: int, month: str, paid: int):
-    column = _paid_column(month)  # белый список, подстановка безопасна
+    Раз участие означает оплату, это же и число оплат за месяц: по нему считается
+    банк розыгрыша. Выбывшие в этом месяце учитываются — они за него платили.
+    """
     with get_con() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE users SET {} = ? WHERE id = ?".format(column),
-            (1 if paid else 0, user_id)
-        )
-        conn.commit()
-
-
-def get_payment(user_id: int, month: str) -> int:
-    column = _paid_column(month)
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT {} FROM users WHERE id = ?".format(column), (user_id,))
-        row = cur.fetchone()
-        return int(row[0]) if row else 0
-
-
-def get_payments(user_id: int):
-    """{'september': 0/1, 'october': 0/1, 'november': 0/1}."""
-    columns = [config.PAID_COLUMN[m] for m in config.ACTIVE_SEASONS]
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT {} FROM users WHERE id = ?".format(", ".join(columns)),
-            (user_id,)
-        )
-        row = cur.fetchone()
-        if row is None:
-            return {m: 0 for m in config.ACTIVE_SEASONS}
-        return {m: int(v) for m, v in zip(config.ACTIVE_SEASONS, row)}
-
-
-def count_paid(month: str) -> int:
-    column = _paid_column(month)
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) FROM users WHERE is_active = 1 AND {} = 1".format(column)
-        )
+        cur.execute("""
+            SELECT COUNT(DISTINCT d.user_id)
+            FROM daily_status d
+            JOIN users u ON u.id = d.user_id
+            WHERE u.is_active = 1
+              AND d.day_msk BETWEEN ? AND ?
+        """, (date_from, date_to))
         return int(cur.fetchone()[0] or 0)
 
 
-def get_unpaid_in_game_users(month: str):
-    """Кто ещё в игре, но не оплатил месяц: [(user_id, tg_id, username, first_name), ...]."""
-    column = _paid_column(month)
-    with get_con() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT id, tg_id, username, first_name
-            FROM users
-            WHERE is_active = 1
-              AND out_of_game = 0
-              AND {} = 0
-            ORDER BY id
-        """.format(column))
-        return cur.fetchall()
-
-
 def get_draw_candidates():
-    """
-    Кандидаты в розыгрыш: [(user_id, tg_id, username, first_name), ...].
-
-    По умолчанию (REQUIRE_PAYMENT = False) — все, кто не выбыл.
-    Если допуск по оплате включён — дополнительно нужны отметки за все активные месяцы.
-    """
-    where = ["is_active = 1", "out_of_game = 0"]
-    if config.REQUIRE_PAYMENT:
-        where += ["{} = 1".format(config.PAID_COLUMN[m]) for m in config.ACTIVE_SEASONS]
-
+    """Все, кто дошёл до конца и не выбыл: [(user_id, tg_id, username, first_name), ...]."""
     with get_con() as conn:
         cur = conn.cursor()
         cur.execute("""
             SELECT id, tg_id, username, first_name
             FROM users
-            WHERE {}
+            WHERE is_active = 1 AND out_of_game = 0
             ORDER BY id
-        """.format(" AND ".join(where)))
+        """)
         return cur.fetchall()
 
 
@@ -1084,11 +1025,10 @@ def count_total_users() -> int:
 
 
 def get_stats_all():
-    """Сводка для /stats_all: всего / в игре / выбыло / оплаты по месяцам / причины выбытия."""
+    """Сводка для /stats_all: всего / в игре / выбыло / причины выбытия."""
     total = count_total_users()
     in_game = count_in_game()
     out = count_out_of_game()
-    paid = {m: count_paid(m) for m in config.ACTIVE_SEASONS}
 
     with get_con() as conn:
         cur = conn.cursor()
@@ -1102,7 +1042,7 @@ def get_stats_all():
 
     return {
         "total": total, "in_game": in_game, "out": out,
-        "paid": paid, "out_reasons": reasons,
+        "out_reasons": reasons,
     }
 
 

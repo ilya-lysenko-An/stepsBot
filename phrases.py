@@ -56,14 +56,6 @@ def greeting(name: str, season, out_of_game: int, bonus_balance: int) -> str:
 
 # ---------- 3.2 ответ на отправку шагов ----------
 
-def steps_ok(name: str, steps: int, streak: int) -> str:
-    return _pick(
-        "Молодец! Норма выполнена. Ты в игре! 🟢",
-        f"Отлично, {name}! Сегодня ты прошагал {steps:,}".replace(",", " ") + ". Так держать!",
-        f"Ещё один день в копилку стабильности. Твой стрик: {streak} {days_word(streak)}. 🔥",
-    )
-
-
 def steps_bonus_used(remaining: int) -> str:
     tail = (
         f"Осталось {remaining} {bonus_word(remaining)}."
@@ -110,18 +102,54 @@ def steps_passive(name: str, steps: int, avg: int, threshold: int) -> str:
     )
 
 
-def steps_not_allowed(season, out_of_game: bool) -> str:
-    """Шаги записаны, но на розыгрыш не влияют: человек выбыл или не допущен."""
-    if out_of_game:
-        return (
-            "Шаги записал. Ты выбыл из розыгрыша, так что на распределение банка "
-            "они не влияют — но для себя считаются."
-        )
-    month = config.MONTH_RU.get(season["name"], "месяц")
+def steps_goal_met(steps: int, goal: int, streak: int, bonus_balance: int) -> str:
+    """Норма за сегодня набрана."""
+    return _pick(
+        f"Норма выполнена — {steps} из {goal}. Ты в игре! 🟢",
+        f"Отлично, {steps} шагов. Норму закрыл, день твой. 🟢",
+        f"Ещё один день в копилку стабильности. Стрик: {streak} {days_word(streak)}. 🔥",
+    )
+
+
+def steps_below_goal(steps: int, goal: int, bonus_balance: int) -> str:
+    """Записали меньше нормы, но день ещё идёт — время дошагать есть."""
+    left = goal - steps
+    tail = (
+        f"Не успеешь — спишется бонус «день отдыха», их у тебя {bonus_balance}."
+        if bonus_balance > 0
+        else "Бонусов у тебя нет, так что до полуночи лучше добрать."
+    )
+    return _pick(
+        f"Записал {steps}. До нормы ещё {left} — день не закончился, успеешь.\n{tail}",
+        f"Пока {steps} из {goal}. Осталось {left}, время до полуночи есть.\n{tail}",
+    )
+
+
+def steps_recorded_out(steps: int) -> str:
+    """Шаги выбывшего: записываем, но на розыгрыш они не влияют."""
     return (
-        f"Шаги записал, но в розыгрыше за {month} ты не участвуешь: "
-        f"взнос за этот месяц не отмечен как оплаченный.\n"
-        f"Если оплата была — напиши {config.PAYMENT_CONTACT}."
+        f"Записал {steps} шагов. Ты выбыл из розыгрыша, так что на распределение "
+        "банка они не влияют — но для себя считаются."
+    )
+
+
+def day_closed_with_bonus(steps: int, goal: int, has_record: bool, remaining: int) -> str:
+    """Итог дня: норма не набрана, но выручил бонус."""
+    what = f"За вчера у тебя {steps} из {goal}" if has_record else "За вчера ты не внёс шаги"
+    tail = (
+        f"Осталось бонусов: {remaining}."
+        if remaining else "Бонусов больше нет — дальше только по норме."
+    )
+    return f"{what}, поэтому я списал 1 бонус «день отдыха». День засчитан, ты в игре.\n{tail}"
+
+
+def day_closed_dropout(steps: int, goal: int, has_record: bool) -> str:
+    """Итог дня: нормы нет и бонусов нет."""
+    what = f"За вчера у тебя {steps} из {goal}" if has_record else "За вчера ты не внёс шаги"
+    return (
+        f"{what}, и бонусов «день отдыха» не осталось.\n\n"
+        "К сожалению, вы выбыли из розыгрыша призового фонда. Вы можете продолжать "
+        "ходить, но не участвуете в распределении банка. Спасибо, что были с нами!"
     )
 
 
@@ -158,46 +186,30 @@ def leaders_header(total: int, active: int, out: int, days_left: int) -> str:
     return line
 
 
-# ---------- 3.5 напоминание об оплате ----------
-
-def payment_reminder(days: int, month: str, deadline_str: str, fee: int) -> str:
-    month_ru = config.MONTH_RU.get(month, month)
-    return (
-        f"Друзья, через {days} {days_word(days)} заканчивается месяц.\n"
-        f"Не забудьте оплатить {month_ru} ({fee} руб.), чтобы продолжить борьбу.\n"
-        f"Если вы уже оплатили — проигнорируйте. Если нет — сделайте это до {deadline_str}."
-    )
-
-
 # ---------- 3.6 уведомление о выбытии ----------
 
 def dropout_notice(reason: str = "violation") -> str:
-    base = (
+    return (
         "К сожалению, вы выбыли из розыгрыша призового фонда. "
         "Вы можете продолжать ходить, но не участвуете в распределении банка. "
         "Спасибо, что были с нами!"
     )
-    if reason == "unpaid":
-        return (
-            "Взнос за новый месяц не поступил, поэтому вы выбыли из розыгрыша "
-            "призового фонда.\n" + base.split("К сожалению, ", 1)[-1].capitalize()
-        )
-    return base
 
 
 # ---------- напоминание о шагах ----------
 
-def evening_reminder(bonus_balance: int, goal: int) -> str:
+def evening_reminder(bonus_balance: int, goal: int, steps_so_far: int = 0) -> str:
     if bonus_balance > 0:
-        tail = (
-            f"Если не успеешь — спишется бонус «день отдыха» "
-            f"(их у тебя {bonus_balance})."
+        tail = f"Если не успеешь — спишется бонус «день отдыха» (их у тебя {bonus_balance})."
+    else:
+        tail = "Бонусов у тебя нет — недобор означает выбытие из розыгрыша."
+
+    if steps_so_far > 0:
+        head = (
+            f"Напоминание.\nУ тебя записано {steps_so_far} из {goal} — "
+            f"до нормы ещё {goal - steps_so_far}."
         )
     else:
-        tail = "Бонусов у тебя нет — пропуск означает выбытие из розыгрыша."
-    return (
-        "Напоминание.\n"
-        f"Шаги за сегодня сами себя не внесут, норма — {goal}.\n"
-        f"{tail}\n"
-        "До 23:59 ещё можно спастись."
-    )
+        head = f"Напоминание.\nШаги за сегодня сами себя не внесут, норма — {goal}."
+
+    return f"{head}\n{tail}\nДо 23:59 ещё можно успеть."

@@ -140,31 +140,30 @@ def parse_hhmm(text: str):
 
 
 def current_streak(user_id: int) -> int:
-    """Сколько дней подряд (заканчивая последним записанным днём) норма выполнена."""
+    """
+    Сколько дней подряд норма выполнена.
+
+    Сегодняшний день ещё не закрыт: если норма пока не набрана, он просто
+    не учитывается — стрик не обнуляем, пока человек может дошагать.
+    """
     rows = database.list_user_daily_results(user_id, ACTIVE_RANGE[0], ACTIVE_RANGE[1])
+    today = today_msk().isoformat()
     streak = 0
-    for _day, _steps, _on_time, result, _reason in reversed(rows):
+    for day_iso, _steps, _on_time, result, _reason in reversed(rows):
         if result == "+":
             streak += 1
+        elif day_iso == today:
+            continue  # день не закрыт, минус пока ничего не значит
         else:
             break
     return streak
 
 
 def is_allowed_in_season(user_id: int, season) -> bool:
-    """
-    Допущен ли участник к активному месяцу.
-
-    По умолчанию достаточно быть зарегистрированным и не выбывшим.
-    Проверка оплаты включается флагом config.REQUIRE_PAYMENT.
-    """
+    """Участвует ли человек в зачёте: зарегистрирован и не выбыл."""
     if season is None or season["type"] != "active":
         return True
-    if database.get_out_of_game(user_id):
-        return False
-    if not config.REQUIRE_PAYMENT:
-        return True
-    return bool(database.get_payment(user_id, season["name"]))
+    return not database.get_out_of_game(user_id)
 
 
 def evaluate_result(steps_value: int, goal: int) -> tuple:
@@ -174,41 +173,53 @@ def evaluate_result(steps_value: int, goal: int) -> tuple:
     return "+", "ok"
 
 
-def resolve_day_with_bonus(user_id: int, season, steps: int, current):
+def resolve_open_day(season, steps: int, current):
     """
-    Применяет правила дня к одной записи.
+    Незакрытый день (сегодня): просто фиксируем шаги.
 
-    Возвращает (result, reason, bonus_used, violation, action, remaining_balance), где action:
-      - "passive"     : пассивный месяц, норма не проверяется
-      - "not_allowed" : активный месяц, но участник не допущен (не оплатил или выбыл)
-      - "ok"          : норма выполнена
-      - "refunded"    : норма выполнена, ранее списанный за этот день бонус возвращён
-      - "used"        : норма не выполнена, списан 1 бонус, день засчитан
-      - "kept"        : день уже был покрыт бонусом ранее (повторно не списываем)
-      - "no_bonus"    : норма не выполнена и бонусов нет — выбытие
+    Норма не проверяется на выбытие — у человека есть время до полуночи,
+    чтобы дошагать и внести число заново. Результат пишем предварительный:
+    итог подведёт ночная проверка.
+    """
+    prev_bonus_used = current[7] if (current and len(current) > 7) else 0
+    if season is None or season["type"] == "passive":
+        return "+", "ok", prev_bonus_used, 0
+
+    if steps >= season["daily_goal"]:
+        return "+", "ok", prev_bonus_used, 0
+    return "-", "lt_10k", prev_bonus_used, 0
+
+
+def resolve_closed_day(user_id: int, season, steps: int, current):
+    """
+    Уже закрытый день (правка задним числом).
+
+    Возвращает (result, reason, bonus_used, violation, action, remaining_balance):
+      - "passive"  : пассивный месяц, норма не проверяется
+      - "out"      : участник выбыл, на зачёт правка не влияет
+      - "ok"       : норма выполнена
+      - "refunded" : норма выполнена, ранее списанный за этот день бонус возвращён
+      - "used"     : норма не выполнена, списан 1 бонус, день засчитан
+      - "kept"     : день уже был покрыт бонусом ранее
+      - "no_bonus" : норма не выполнена и бонусов нет
     """
     prev_bonus_used = current[7] if (current and len(current) > 7) else 0
 
     if season is None or season["type"] == "passive":
         return "+", "ok", 0, 0, "passive", database.get_bonus_balance(user_id)
 
-    goal = season["daily_goal"]
-    base_result, base_reason = evaluate_result(steps, goal)
+    base_result, base_reason = evaluate_result(steps, season["daily_goal"])
 
-    if not is_allowed_in_season(user_id, season):
-        # Шаги записываем честно, но бонусы не трогаем и о выбытии не сообщаем.
-        violation = 1 if base_result == "-" else 0
-        return base_result, base_reason, 0, violation, "not_allowed", database.get_bonus_balance(user_id)
+    if database.get_out_of_game(user_id):
+        return base_result, base_reason, prev_bonus_used, \
+            (1 if base_result == "-" else 0), "out", database.get_bonus_balance(user_id)
 
     if base_result == "+":
         if prev_bonus_used:
-            balance = database.adjust_bonus_balance(
-                user_id, +1, reason="day_off_refund", day_msk=None
-            )
+            balance = database.adjust_bonus_balance(user_id, +1, reason="day_off_refund")
             return "+", "ok", 0, 0, "refunded", balance
         return "+", "ok", 0, 0, "ok", database.get_bonus_balance(user_id)
 
-    # норма не выполнена
     if prev_bonus_used:
         return "+", "bonus", 1, 0, "kept", database.get_bonus_balance(user_id)
 
@@ -220,17 +231,36 @@ def resolve_day_with_bonus(user_id: int, season, steps: int, current):
     return base_result, base_reason, 0, 1, "no_bonus", 0
 
 
-def bonus_reply_text(action: str, remaining: int, name: str, steps: int,
-                     streak: int, season, user_id: int) -> str:
+def open_day_reply(user_id: int, season, steps: int) -> str:
+    """Что ответить на шаги за сегодня — день ещё не закрыт."""
+    if season is None or season["type"] == "passive":
+        avg, _days = database.get_season_avg(user_id, season["date_from"], season["date_to"]) \
+            if season else (0, 0)
+        if season:
+            return phrases.steps_passive("", steps, avg, season["passive_avg_threshold"])
+        return f"Записал {steps} шагов. Сейчас межсезонье — норма не проверяется."
+
+    if database.get_out_of_game(user_id):
+        return phrases.steps_recorded_out(steps)
+
+    goal = season["daily_goal"]
+    if steps >= goal:
+        return phrases.steps_goal_met(steps, goal, current_streak(user_id),
+                                      database.get_bonus_balance(user_id))
+    return phrases.steps_below_goal(steps, goal, database.get_bonus_balance(user_id))
+
+
+def closed_day_reply(action: str, remaining: int, steps: int, season, user_id: int) -> str:
+    """Что ответить на правку уже закрытого дня."""
     if action == "passive":
         if season is None:
             return f"Записал {steps} шагов. Сейчас межсезонье — норма не проверяется."
         avg, _days = database.get_season_avg(user_id, season["date_from"], season["date_to"])
-        return phrases.steps_passive(name, steps, avg, season["passive_avg_threshold"])
-    if action == "not_allowed":
-        return phrases.steps_not_allowed(season, bool(database.get_out_of_game(user_id)))
+        return phrases.steps_passive("", steps, avg, season["passive_avg_threshold"])
+    if action == "out":
+        return phrases.steps_recorded_out(steps)
     if action == "ok":
-        return phrases.steps_ok(name, steps, streak)
+        return "Записал. Норма за тот день выполнена. 🟢"
     if action == "used":
         return phrases.steps_bonus_used(remaining)
     if action == "kept":
@@ -264,23 +294,6 @@ async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, tg_user_id: int) -> 
 
 # ===================== тексты =====================
 
-def paid_months_line(user_id: int):
-    """
-    Строка об оплатах или None.
-
-    Если допуск по оплате выключен и организатор ничего не отмечал, строку
-    не показываем — она бы только путала: участие от оплаты не зависит.
-    """
-    payments = database.get_payments(user_id)
-    if not config.REQUIRE_PAYMENT and not any(payments.values()):
-        return None
-    parts = []
-    for month in config.ACTIVE_SEASONS:
-        mark = "✅" if payments[month] else "—"
-        parts.append(f"{mark} {config.MONTH_RU[month]}")
-    return " · ".join(parts)
-
-
 def build_status_text(user_id: int) -> str:
     """Краткий статус — /status."""
     out, reason = database.get_out_state(user_id)
@@ -295,15 +308,11 @@ def build_status_text(user_id: int) -> str:
     if out and reason:
         human = {
             "violation": "причина: пропуск без бонуса",
-            "unpaid": "причина: не оплачен месяц",
             "manual": "причина: решение организатора",
         }.get(reason)
         if human:
             lines.append(human)
     lines.append(f"🎟 Бонусов «день отдыха»: {bonus_balance}")
-    paid_line = paid_months_line(user_id)
-    if paid_line:
-        lines.append(f"💳 Взнос: {paid_line}")
     if season:
         lines.append(
             f"📅 Сейчас: {config.MONTH_RU[season['name']]} "
@@ -327,9 +336,6 @@ def build_stats_text(user_id: int) -> str:
         lines.append("Сейчас межсезонье — активного месяца нет.")
         lines.append(f"🎟 Бонусов: {bonus_balance}")
         lines.append(f"Статус: {phrases.status_label(out)}")
-        paid_line = paid_months_line(user_id)
-        if paid_line:
-            lines.append(f"💳 Взнос: {paid_line}")
         return "\n".join(lines)
 
     month_ru = config.MONTH_RU[season["name"]]
@@ -346,9 +352,6 @@ def build_stats_text(user_id: int) -> str:
         lines.append(f"🎯 Бонусный порог среднего: {season['passive_avg_threshold']}")
     lines.append(f"🎟 Бонусов: {bonus_balance}")
     lines.append(f"Статус: {phrases.status_label(out)}")
-    paid_line = paid_months_line(user_id)
-    if paid_line:
-        lines.append(f"💳 Взнос: {paid_line}")
     lines.append(f"⏳ До конца месяца: {days_left} {phrases.days_word(days_left)}")
     lines.append("")
     lines.append(phrases.stats_bonus_comment(bonus_balance))
@@ -445,29 +448,22 @@ def build_register_text() -> str:
 
     lines += [
         "",
-        "Правила коротко:",
-        "• каждый день вносишь шаги до полуночи;",
-        "• не выполнил норму и нет бонуса «день отдыха» — выбываешь из розыгрыша;",
-        "• бонусы списываются автоматически, следить не нужно;",
-        "• в розыгрыше в конце ноября участвуют все, кто дошёл до конца и не выбыл.",
+        "Как считается день:",
+        "• в течение дня вносишь шаги сколько угодно раз — бот держит последнее число;",
+        "• недобрал днём — ничего страшного, можно дошагать и внести заново;",
+        "• в полночь бот смотрит итог: норма есть — день засчитан;",
+        "• нормы нет — списывается бонус «день отдыха»;",
+        "• бонусов не осталось — выбываешь из розыгрыша.",
+        "",
+        "🎟 Бонусы «день отдыха» начисляются за пассивные месяцы (июль, август) "
+        f"при среднем от {config.PASSIVE_AVG_THRESHOLD} шагов и тратятся автоматически.",
+        "",
+        "💰 В розыгрыше в конце ноября участвуют все, кто дошёл до конца и не выбыл. "
+        "Победителей трое, выбираются случайно: 75% банка им поровну, 25% — организаторам.",
     ]
 
-    if config.REQUIRE_PAYMENT:
-        lines += [
-            "",
-            f"💳 Взнос: {config.ENTRY_FEE} ₽ за каждый месяц, до 1-го числа.",
-            "Без отметки оплаты к месяцу не допускают.",
-        ]
-        if config.PAYMENT_URL:
-            lines.append(f"Оплата: {config.PAYMENT_URL}")
-        lines.append(f"Чек присылать: {config.PAYMENT_CONTACT}")
-    else:
-        lines += [
-            "",
-            f"💰 Призовой фонд собирается отдельно ({config.ENTRY_FEE} ₽ за месяц) — "
-            f"по вопросам взноса пиши {config.PAYMENT_CONTACT}.",
-            "На участие в челлендже и подсчёт шагов это не влияет.",
-        ]
+    if config.PAYMENT_URL or config.PAYMENT_CONTACT:
+        lines += ["", f"По взносу ({config.ENTRY_FEE} ₽ за месяц) — {config.PAYMENT_CONTACT}."]
         if config.PAYMENT_URL:
             lines.append(f"Ссылка на перевод: {config.PAYMENT_URL}")
 
@@ -506,9 +502,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• каждый день до полуночи вносишь шаги в бота;\n"
         "• бот напомнит вечером, если забыл;\n"
         "• ошибся — можно отредактировать позже.\n\n"
-        "🚫 Выбытие из розыгрыша:\n"
-        "• не выполнил норму и нет бонуса «день отдыха» — выбыл;\n"
-        "• пропустил день без бонуса — тоже выбыл.\n\n"
+        "🚫 Как закрывается день:\n"
+        "• в течение дня можно вносить шаги сколько угодно раз;\n"
+        "• недобрал — не страшно, дошагай и внеси заново;\n"
+        "• в полночь бот смотрит итог: нормы нет — спишется бонус;\n"
+        "• бонусов не осталось — выбываешь из розыгрыша.\n\n"
         "🎟 Бонусы «день отдыха»:\n"
         "• начисляются за пассивные месяцы (июль, август) при среднем "
         f"от {config.PASSIVE_AVG_THRESHOLD} шагов;\n"
@@ -705,17 +703,30 @@ async def handle_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 # ===================== ввод шагов =====================
 
 async def save_steps(update: Update, user_id: int, day: datetime.date, steps: int, edited: bool):
+    """
+    Сохраняет шаги за день.
+
+    Сегодняшний день просто фиксируется: итог подведёт ночная проверка, а до
+    полуночи человек может дошагать и внести число заново. Правка прошлого дня
+    разбирается сразу — он уже закрыт.
+    """
     day_str = day.isoformat()
     season = config.season_for_day(day)
     current = database.get_daily_status(user_id, day_str)
+    is_today = day == today_msk()
 
-    submitted_on_time = 1 if day == today_msk() else 0
+    submitted_on_time = 1 if is_today else 0
     if current is not None:
         submitted_on_time = current[4]
 
-    result, reason, bonus_used, violation, action, remaining = resolve_day_with_bonus(
-        user_id, season, steps, current
-    )
+    if is_today:
+        result, reason, bonus_used, violation = resolve_open_day(season, steps, current)
+        action = "open"
+        remaining = database.get_bonus_balance(user_id)
+    else:
+        result, reason, bonus_used, violation, action, remaining = resolve_closed_day(
+            user_id, season, steps, current
+        )
 
     database.upsert_daily_status(
         user_id=user_id, day_msk=day_str, steps_value=steps,
@@ -731,10 +742,8 @@ async def save_steps(update: Update, user_id: int, day: datetime.date, steps: in
         " (редакт)" if edited else "", user.id, _uname(user), day_str, steps, result, reason, action
     )
 
-    text = bonus_reply_text(
-        action, remaining, user.first_name or "бегун", steps,
-        current_streak(user_id), season, user_id
-    )
+    text = (open_day_reply(user_id, season, steps) if is_today
+            else closed_day_reply(action, remaining, steps, season, user_id))
     await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
 
 
@@ -957,85 +966,6 @@ async def _notify(context, tg_id: int, text: str):
 
 
 @admin_only
-async def cmd_confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args or []
-    if len(args) < 2:
-        await update.message.reply_text("Формат: /confirm_payment <user> <sep|oct|nov>")
-        return
-
-    target = _resolve_target(args[0])
-    if target is None:
-        await update.message.reply_text(f"Участник «{args[0]}» не найден.")
-        return
-
-    month = config.normalize_month(args[1])
-    if month not in config.ACTIVE_SEASONS:
-        await update.message.reply_text("Месяц должен быть sep, oct или nov.")
-        return
-
-    user_id, tg_id, username, first_name = target
-    database.set_payment(user_id, month, 1)
-
-    # Оплата снимает выбытие, если человек выбыл именно за неоплату.
-    out, reason = database.get_out_state(user_id)
-    restored = False
-    if out and reason == "unpaid":
-        database.set_out_of_game(user_id, 0)
-        database.recompute_out_of_game(user_id)
-        restored = database.get_out_of_game(user_id) == 0
-
-    database.log_admin_action(
-        update.effective_user.id, "confirm_payment", user_id,
-        f"month={month}, restored={restored}"
-    )
-    events.info(
-        "ОПЛАТА+ | admin=%s | %s | месяц=%s | возврат_в_игру=%s",
-        update.effective_user.id, _display(username, first_name), month, restored
-    )
-
-    await update.message.reply_text(
-        f"✅ Оплата {config.MONTH_RU[month]} отмечена: {_display(username, first_name)}"
-        + ("\nУчастник возвращён в игру." if restored else "")
-    )
-    await _notify(
-        context, tg_id,
-        f"💳 Оплата за {config.MONTH_RU[month]} подтверждена. "
-        + ("Ты снова в игре!" if restored else "Ты допущен к месяцу — удачи!")
-    )
-
-
-@admin_only
-async def cmd_unconfirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args or []
-    if len(args) < 2:
-        await update.message.reply_text("Формат: /unconfirm_payment <user> <sep|oct|nov>")
-        return
-
-    target = _resolve_target(args[0])
-    if target is None:
-        await update.message.reply_text(f"Участник «{args[0]}» не найден.")
-        return
-
-    month = config.normalize_month(args[1])
-    if month not in config.ACTIVE_SEASONS:
-        await update.message.reply_text("Месяц должен быть sep, oct или nov.")
-        return
-
-    user_id, _tg_id, username, first_name = target
-    database.set_payment(user_id, month, 0)
-    database.log_admin_action(
-        update.effective_user.id, "unconfirm_payment", user_id, f"month={month}"
-    )
-    events.info(
-        "ОПЛАТА- | admin=%s | %s | месяц=%s",
-        update.effective_user.id, _display(username, first_name), month
-    )
-    await update.message.reply_text(
-        f"❌ Оплата {config.MONTH_RU[month]} снята: {_display(username, first_name)}"
-    )
-
-
-@admin_only
 async def cmd_set_out(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
     if not args:
@@ -1146,22 +1076,12 @@ async def cmd_stats_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔴 Выбыло: {stats['out']}",
     ]
     if stats["out_reasons"]:
-        human = {"violation": "нарушение", "unpaid": "неоплата",
-                 "manual": "вручную", "unknown": "причина не указана"}
+        human = {"violation": "нарушение", "manual": "вручную",
+                 "unknown": "причина не указана"}
         detail = ", ".join(
             f"{human.get(k, k)}: {v}" for k, v in sorted(stats["out_reasons"].items())
         )
         lines.append(f"   ({detail})")
-
-    lines.append("")
-    lines.append("💳 Оплаты:")
-    bank = 0
-    for month in config.ACTIVE_SEASONS:
-        count = stats["paid"][month]
-        fee = config.season_by_name(month)["entry_fee"]
-        bank += count * fee
-        lines.append(f"• {config.MONTH_RU[month]}: {count} — {count * fee} ₽")
-    lines.append(f"Банк на сейчас: {bank} ₽")
 
     if season:
         lines.append("")
@@ -1191,45 +1111,41 @@ async def cmd_admin_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @admin_only
-async def cmd_run_monthly_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принудительный запуск проверки перехода месяца."""
-    if not config.REQUIRE_PAYMENT:
-        await update.message.reply_text(
-            "Допуск по оплате выключен (REQUIRE_PAYMENT=0), поэтому проверка ничего не делает.\n"
-            "Участвуют все, кто нажал «УЧАСТВУЮ» и не выбыл.\n"
-            "Чтобы включить правило из ТЗ, добавь в token.env: REQUIRE_PAYMENT=1"
-        )
-        return
+async def cmd_run_daily_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Принудительно закрыть день — для тестов и на случай сбоя ночной задачи.
 
+    /run_daily_check            — закрыть вчерашний день
+    /run_daily_check 2026-09-05 — закрыть конкретную дату
+    """
     args = context.args or []
     if args:
-        month = config.normalize_month(args[0])
+        try:
+            day = datetime.date.fromisoformat(args[0])
+        except ValueError:
+            await update.message.reply_text("Формат даты: /run_daily_check 2026-09-05")
+            return
     else:
-        season = config.current_season()
-        month = season["name"] if season and season["type"] == "active" else None
-        if month is None:
-            nxt = config.next_season(season["name"]) if season else None
-            month = nxt["name"] if nxt and nxt["type"] == "active" else None
+        day = today_msk() - datetime.timedelta(days=1)
 
-    if month not in config.ACTIVE_SEASONS:
+    if day >= today_msk():
         await update.message.reply_text(
-            "Не понял месяц. Формат: /run_monthly_check <sep|oct|nov>"
+            "Этот день ещё не закончился — у людей есть время дошагать. "
+            "Закрывать можно только прошедшие дни."
         )
         return
 
-    dropped = await run_month_gate(context, month)
+    counted, bonused, dropped = await close_day(context, day)
     database.log_admin_action(
-        update.effective_user.id, "run_monthly_check", None,
-        f"month={month}, dropped={len(dropped)}"
+        update.effective_user.id, "run_daily_check", None,
+        f"day={day.isoformat()}, counted={counted}, bonused={bonused}, dropped={dropped}"
     )
-    if not dropped:
-        await update.message.reply_text(
-            f"Проверка за {config.MONTH_RU[month]}: все, кто в игре, оплатили. Никто не выбыл."
-        )
-        return
-    lines = [f"Проверка за {config.MONTH_RU[month]}: выбыло {len(dropped)} за неоплату:"]
-    lines += [f"• {name}" for name in dropped]
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(
+        f"День {day.strftime('%d.%m.%Y')} закрыт.\n"
+        f"🟢 Норму выполнили: {counted}\n"
+        f"🎟 Закрыто бонусом: {bonused}\n"
+        f"🔴 Выбыло: {dropped}"
+    )
 
 
 @admin_only
@@ -1253,29 +1169,40 @@ async def cmd_run_passive_bonuses(update: Update, context: ContextTypes.DEFAULT_
 @admin_only
 async def cmd_run_final_draw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /run_final_draw        — посчитать и показать результат только организатору
-    /run_final_draw send   — то же + разослать результат участникам
+    Розыгрыш призового фонда.
+
+    /run_final_draw             — посчитать и показать только организатору
+    /run_final_draw 45000       — задать банк вручную
+    /run_final_draw 45000 send  — посчитать и разослать участникам
+    /run_final_draw send        — разослать с банком по умолчанию
     """
-    args = context.args or []
-    broadcast = bool(args) and args[0].lower() in ("send", "рассылка", "broadcast")
+    args = [a.lower() for a in (context.args or [])]
+    broadcast = any(a in ("send", "рассылка", "broadcast") for a in args)
+    manual_bank = next((int(a) for a in args if a.isdigit()), None)
 
     candidates = database.get_draw_candidates()
     if not candidates:
+        await update.message.reply_text("Кандидатов нет: в игре не осталось никого.")
+        return
+
+    # Участие в месяце = оплата за него, поэтому банк считаем по числу тех,
+    # кто в этом месяце хоть раз вносил шаги.
+    per_month = []
+    for month in config.ACTIVE_SEASONS:
+        s = config.season_by_name(month)
+        count = database.count_participants_in_month(s["date_from"], s["date_to"])
+        per_month.append((month, count, count * s["entry_fee"]))
+
+    computed_bank = sum(amount for _m, _c, amount in per_month)
+    bank = manual_bank if manual_bank is not None else computed_bank
+
+    if bank <= 0:
         await update.message.reply_text(
-            "Кандидатов нет: никто не оплатил все три месяца, оставшись в игре."
+            "Банк получился нулевым — записей шагов за активные месяцы нет.\n"
+            "Задайте сумму вручную: /run_final_draw 45000"
         )
         return
 
-    bank = sum(
-        database.count_paid(month) * config.season_by_name(month)["entry_fee"]
-        for month in config.ACTIVE_SEASONS
-    )
-    if bank == 0:
-        await update.message.reply_text(
-            "⚠️ Банк равен нулю: ни одной оплаты не отмечено.\n"
-            "Отметь их через /confirm_payment <user> <sep|oct|nov> и запусти розыгрыш заново — "
-            "иначе суммы посчитаются от нуля."
-        )
     organizer_total = int(round(bank * config.ORGANIZER_SHARE))
     per_organizer = organizer_total // len(config.ORGANIZERS)
     winners_total = bank - organizer_total
@@ -1287,7 +1214,7 @@ async def cmd_run_final_draw(update: Update, context: ContextTypes.DEFAULT_TYPE)
     database.save_draw_result(bank, per_organizer, per_winner, "; ".join(winner_names))
     database.log_admin_action(
         update.effective_user.id, "run_final_draw", None,
-        f"bank={bank}, winners={winner_names}, broadcast={broadcast}"
+        f"bank={bank}, manual={manual_bank is not None}, winners={winner_names}, broadcast={broadcast}"
     )
     events.info("РОЗЫГРЫШ | admin=%s | банк=%s | победители=%s",
                 update.effective_user.id, bank, winner_names)
@@ -1295,7 +1222,7 @@ async def cmd_run_final_draw(update: Update, context: ContextTypes.DEFAULT_TYPE)
     lines = [
         "🎉 Итоги осеннего челленджа!",
         "",
-        f"Кандидатов (оплатили 3 месяца и не выбыли): {len(candidates)}",
+        f"Дошли до конца и не выбыли: {len(candidates)}",
         f"💰 Банк: {bank} ₽",
         f"• Организаторам 25%: {organizer_total} ₽ "
         f"({' и '.join(config.ORGANIZERS)} — по {per_organizer} ₽)",
@@ -1309,9 +1236,18 @@ async def cmd_run_final_draw(update: Update, context: ContextTypes.DEFAULT_TYPE)
                      f"банк поделён на {len(winners)}.")
     result_text = "\n".join(lines)
 
-    await update.message.reply_text(
-        result_text + ("" if broadcast else "\n\nЧтобы разослать участникам: /run_final_draw send")
-    )
+    detail = ["", "Как посчитан банк:"]
+    for month, count, amount in per_month:
+        detail.append(f"• {config.MONTH_RU[month]}: {count} участников — {amount} ₽")
+    if manual_bank is not None:
+        detail.append(f"Расчётный банк {computed_bank} ₽ заменён вашим значением {bank} ₽.")
+    else:
+        detail.append("Задать другую сумму: /run_final_draw <сумма>")
+    if not broadcast:
+        detail.append("Разослать участникам: /run_final_draw " +
+                      (str(bank) + " send" if manual_bank is not None else "send"))
+
+    await update.message.reply_text(result_text + "\n" + "\n".join(detail))
 
     if not broadcast:
         return
@@ -1332,9 +1268,6 @@ async def cmd_run_final_draw(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def cmd_admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🛠 Команды организатора\n\n"
-        "Оплаты:\n"
-        "/confirm_payment <user> <sep|oct|nov>\n"
-        "/unconfirm_payment <user> <sep|oct|nov>\n\n"
         "Статусы:\n"
         "/set_out <user>\n"
         "/unset_out <user>\n\n"
@@ -1343,7 +1276,7 @@ async def cmd_admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/remove_bonus <user> <count>\n"
         "/run_passive_bonuses — начислить за июль/август по порогу\n\n"
         "Процессы:\n"
-        "/run_monthly_check [месяц] — проверка допуска по оплате\n"
+        "/run_daily_check [дата] — закрыть день вручную (по умолчанию вчерашний)\n"
         "/run_final_draw [send] — розыгрыш (без send — только показать)\n\n"
         "Отчёты:\n"
         "/stats_all — сводка\n"
@@ -1353,18 +1286,6 @@ async def cmd_admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ===================== фоновые задачи =====================
-
-async def run_month_gate(context: ContextTypes.DEFAULT_TYPE, month: str):
-    """Выбытие тех, кто в игре, но не оплатил месяц. Возвращает список имён."""
-    dropped = []
-    for user_id, tg_id, username, first_name in database.get_unpaid_in_game_users(month):
-        database.set_out_of_game(user_id, 1, reason="unpaid")
-        dropped.append(_display(username, first_name))
-        events.info("ВЫБЫТИЕ (неоплата) | %s | месяц=%s",
-                    _display(username, first_name), month)
-        await safe_send_message(context.bot, tg_id, phrases.dropout_notice("unpaid"))
-    return dropped
-
 
 async def run_passive_bonuses(context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1403,72 +1324,109 @@ async def run_passive_bonuses(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    """Вечернее напоминание — каждому в его время (по умолчанию 22:00 МСК)."""
+    """
+    Вечернее напоминание — каждому в его время (по умолчанию 22:00 МСК).
+
+    Пишем и тем, кто ещё ничего не внёс, и тем, кто внёс меньше нормы:
+    до полуночи и те и другие успевают дошагать.
+    """
     now = now_msk()
     day = now.date()
     if not config.is_within_challenge(day):
         return
 
     season = config.season_for_day(day)
+    if season is None or season["type"] != "active":
+        return
+
     hhmm = now.strftime("%H:%M")
     day_str = day.isoformat()
+    goal = season["daily_goal"]
 
     for user_id, tg_id, bonus_balance in database.get_users_for_reminder(hhmm):
-        if season and season["type"] == "active" and not is_allowed_in_season(user_id, season):
-            continue
-        if database.get_daily_status(user_id, day_str) is not None:
-            continue
+        row = database.get_daily_status(user_id, day_str)
+        steps_so_far = int(row[3]) if row else 0
+        if steps_so_far >= goal:
+            continue  # норма уже набрана
 
-        goal = season["daily_goal"] if season and season["type"] == "active" else 0
-        text = (
-            phrases.evening_reminder(bonus_balance, goal) if goal
-            else "Напоминание: не забудь внести шаги за сегодня — они считаются в среднее за месяц."
+        await safe_send_message(
+            context.bot, tg_id,
+            phrases.evening_reminder(bonus_balance, goal, steps_so_far),
+            reply_markup=MAIN_KEYBOARD
         )
-        await safe_send_message(context.bot, tg_id, text, reply_markup=MAIN_KEYBOARD)
 
 
-async def finalize_day_job(context: ContextTypes.DEFAULT_TYPE):
+async def close_day(context: ContextTypes.DEFAULT_TYPE, day: datetime.date):
     """
-    После полуночи закрываем вчерашний день для допущенных участников,
-    которые не отправили шаги: есть бонус → списываем; бонуса нет → выбытие.
+    Подводит итог дня для всех участников в игре.
+
+    Смотрим последнее значение шагов за день. Норма набрана — день засчитан.
+    Недобор или записи нет — списываем бонус «день отдыха», а если бонусов
+    не осталось, человек выбывает. Повторный запуск ничего не ломает.
+    Возвращает (засчитано, покрыто бонусом, выбыло).
     """
-    day = today_msk() - datetime.timedelta(days=1)
     season = config.season_for_day(day)
     if season is None or season["type"] != "active":
-        return  # в пассивные месяцы пропуск дня ничем не грозит
+        return 0, 0, 0  # в пассивные месяцы день ничем не грозит
 
     day_str = day.isoformat()
-    paid_gate = season["name"] if config.REQUIRE_PAYMENT else None
-    for user_id, tg_id, bonus_balance in database.get_users_missing_status_for_day(day_str, paid_gate):
+    goal = season["daily_goal"]
+    counted = bonused = dropped = 0
+
+    for user_id, tg_id, bonus_balance, steps_value, has_record, bonus_used in \
+            database.get_users_for_day_check(day_str):
+
+        if has_record and (steps_value >= goal or bonus_used):
+            counted += 1
+            continue
+
+        reason = "lt_10k" if has_record else "no_submission"
+
         if bonus_balance > 0:
             remaining = database.adjust_bonus_balance(
                 user_id, -1, reason="day_off_used", day_msk=day_str
             )
             database.upsert_daily_status(
-                user_id=user_id, day_msk=day_str, steps_value=0,
+                user_id=user_id, day_msk=day_str, steps_value=steps_value,
                 submitted_on_time=0, result="+", result_reason="bonus",
                 bonus_used=1, violation=0, season=season["name"]
             )
-            database.recompute_out_of_game(user_id)
-            events.info("ПРОПУСК→БОНУС | tg_id=%s | %s | осталось=%s", tg_id, day_str, remaining)
+            bonused += 1
+            events.info("ДЕНЬ ЗАКРЫТ БОНУСОМ | tg_id=%s | %s | шагов=%s | осталось=%s",
+                        tg_id, day_str, steps_value, remaining)
             await safe_send_message(
                 context.bot, tg_id,
-                "Ты не отправил шаги за вчера, поэтому я списал 1 бонус «день отдыха» — "
-                f"день засчитан, ты в игре. Осталось бонусов: {remaining}."
+                phrases.day_closed_with_bonus(steps_value, goal, has_record, remaining)
             )
         else:
             database.upsert_daily_status(
-                user_id=user_id, day_msk=day_str, steps_value=0,
-                submitted_on_time=0, result="-", result_reason="no_submission",
+                user_id=user_id, day_msk=day_str, steps_value=steps_value,
+                submitted_on_time=0, result="-", result_reason=reason,
                 bonus_used=0, violation=1, season=season["name"]
             )
-            database.recompute_out_of_game(user_id)
-            events.info("ВЫБЫТИЕ (пропуск) | tg_id=%s | %s", tg_id, day_str)
-            await safe_send_message(context.bot, tg_id, phrases.dropout_notice("violation"))
+            database.set_out_of_game(user_id, 1, reason="violation")
+            dropped += 1
+            events.info("ВЫБЫТИЕ | tg_id=%s | %s | шагов=%s из %s",
+                        tg_id, day_str, steps_value, goal)
+            await safe_send_message(
+                context.bot, tg_id,
+                phrases.day_closed_dropout(steps_value, goal, has_record)
+            )
+
+    return counted, bonused, dropped
+
+
+async def finalize_day_job(context: ContextTypes.DEFAULT_TYPE):
+    """После полуночи подводим итог вчерашнего дня."""
+    day = today_msk() - datetime.timedelta(days=1)
+    counted, bonused, dropped = await close_day(context, day)
+    if counted or bonused or dropped:
+        events.info("ИТОГ ДНЯ | %s | норма=%s | бонусом=%s | выбыло=%s",
+                    day.isoformat(), counted, bonused, dropped)
 
 
 async def monthly_check_job(context: ContextTypes.DEFAULT_TYPE):
-    """В первый день активного месяца выбиваем тех, кто его не оплатил."""
+    """В первый день активного месяца сообщаем всем о новой норме."""
     day = today_msk()
     season = config.season_for_day(day)
     if season is None or season["type"] != "active":
@@ -1476,59 +1434,22 @@ async def monthly_check_job(context: ContextTypes.DEFAULT_TYPE):
     if day.isoformat() != season["date_from"]:
         return
 
-    if not config.REQUIRE_PAYMENT:
-        # Допуск по оплате выключен — просто сообщаем организаторам о старте месяца.
-        events.info("ПЕРЕХОД МЕСЯЦА | %s | допуск по оплате выключен", season["name"])
-        for admin_id in config.admin_ids():
-            await safe_send_message(
-                context.bot, admin_id,
-                f"📅 Начался {config.MONTH_RU[season['name']]}, "
-                f"норма дня — {season['daily_goal']}.\n"
-                f"В игре: {database.count_in_game()}. "
-                "Допуск по оплате выключен, никто не выбыл."
-            )
-        return
+    month_ru = config.MONTH_RU[season["name"]]
+    goal = season["daily_goal"]
+    events.info("НОВЫЙ МЕСЯЦ | %s | норма=%s", season["name"], goal)
 
-    dropped = await run_month_gate(context, season["name"])
-    events.info("ПЕРЕХОД МЕСЯЦА | %s | выбыло за неоплату=%s", season["name"], len(dropped))
+    for _uid, tg_id, _username, _first_name in database.get_in_game_users():
+        await safe_send_message(
+            context.bot, tg_id,
+            f"📅 Начался {month_ru} — норма растёт до {goal} шагов в день.\n"
+            "Правила прежние: не набрал за день и нет бонуса — выбываешь."
+        )
 
     for admin_id in config.admin_ids():
         await safe_send_message(
             context.bot, admin_id,
-            f"📅 Начался {config.MONTH_RU[season['name']]}. "
-            f"Выбыло за неоплату: {len(dropped)}.\n"
-            + ("\n".join(f"• {n}" for n in dropped) if dropped else "Все оплатили.")
+            f"📅 Начался {month_ru}, норма {goal}. В игре: {database.count_in_game()}."
         )
-
-
-async def payment_reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    """За 5, 3 и 1 день до конца месяца напоминаем оплатить следующий."""
-    if not config.REQUIRE_PAYMENT:
-        return
-
-    day = today_msk()
-    season = config.season_for_day(day)
-    if season is None:
-        return
-
-    nxt = config.next_season(season["name"])
-    if nxt is None or nxt["type"] != "active":
-        return
-
-    days = config.days_left_in_season(season, day)
-    if days not in (5, 3, 1):
-        return
-
-    deadline = datetime.date.fromisoformat(nxt["date_from"]) - datetime.timedelta(days=1)
-    text = phrases.payment_reminder(
-        days, nxt["name"], deadline.strftime("%d.%m.%Y"), nxt["entry_fee"]
-    )
-
-    sent = 0
-    for user_id, tg_id, _username, _first_name in database.get_unpaid_in_game_users(nxt["name"]):
-        if await safe_send_message(context.bot, tg_id, text):
-            sent += 1
-    events.info("НАПОМИНАНИЕ ОБ ОПЛАТЕ | месяц=%s | отправлено=%s", nxt["name"], sent)
 
 
 # ===================== запуск =====================
@@ -1553,7 +1474,6 @@ def main():
     app.job_queue.run_repeating(reminder_job, interval=60, first=10)
     app.job_queue.run_daily(finalize_day_job, time=time(hour=0, minute=0, second=5, tzinfo=MSK))
     app.job_queue.run_daily(monthly_check_job, time=time(hour=0, minute=1, second=0, tzinfo=MSK))
-    app.job_queue.run_daily(payment_reminder_job, time=time(hour=12, minute=0, second=0, tzinfo=MSK))
 
     app.add_handler(CommandHandler("start", start))
 
@@ -1567,13 +1487,11 @@ def main():
     app.add_handler(CommandHandler("myid", cmd_myid))
 
     # организаторы
-    app.add_handler(CommandHandler("confirm_payment", cmd_confirm_payment))
-    app.add_handler(CommandHandler("unconfirm_payment", cmd_unconfirm_payment))
     app.add_handler(CommandHandler("set_out", cmd_set_out))
     app.add_handler(CommandHandler("unset_out", cmd_unset_out))
     app.add_handler(CommandHandler("add_bonus", cmd_add_bonus))
     app.add_handler(CommandHandler("remove_bonus", cmd_remove_bonus))
-    app.add_handler(CommandHandler("run_monthly_check", cmd_run_monthly_check))
+    app.add_handler(CommandHandler("run_daily_check", cmd_run_daily_check))
     app.add_handler(CommandHandler("run_passive_bonuses", cmd_run_passive_bonuses))
     app.add_handler(CommandHandler("run_final_draw", cmd_run_final_draw))
     app.add_handler(CommandHandler("stats_all", cmd_stats_all))

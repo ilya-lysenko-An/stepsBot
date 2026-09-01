@@ -66,14 +66,7 @@ ACTIVE_SEASONS = [s["name"] for s in SEASONS if s["type"] == "active"]
 CHALLENGE_START = SEASONS[0]["date_from"]
 CHALLENGE_END = SEASONS[-1]["date_to"]
 
-# Колонка оплаты в users для каждого активного месяца.
-PAID_COLUMN = {
-    "september": "paid_september",
-    "october": "paid_october",
-    "november": "paid_november",
-}
-
-# То, что организатор может набрать в админ-команде вместо полного имени месяца.
+# То, что организатор может набрать вместо полного имени месяца.
 MONTH_ALIASES = {
     "sep": "september", "sept": "september", "september": "september",
     "09": "september", "9": "september", "сен": "september", "сентябрь": "september",
@@ -97,15 +90,6 @@ MONTH_RU_PREP = {
     "july": "июле", "august": "августе",
     "september": "сентябре", "october": "октябре", "november": "ноябре",
 }
-
-# ---------- допуск к месяцу ----------
-# False (по умолчанию): нажал «УЧАСТВУЮ» — участвуешь. Бот никого не отсеивает
-# за неоплату, отметки оплаты организатор ставит вручную и они влияют только
-# на расчёт банка.
-# True: поведение из ТЗ — без отметки оплаты нет допуска к месяцу и розыгрышу.
-# Включается в token.env: REQUIRE_PAYMENT=1
-REQUIRE_PAYMENT = (os.getenv("REQUIRE_PAYMENT") or "0").strip().lower() in ("1", "true", "yes", "on")
-
 
 # ---------- розыгрыш ----------
 WINNERS_COUNT = 3
