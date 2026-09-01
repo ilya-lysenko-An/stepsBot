@@ -16,7 +16,7 @@ sudo apt install -y python3 python3-venv python3-pip git
 Бот не должен ходить под root — он держит токен и базу.
 
 ```bash
-sudo useradd --system --shell /usr/sbin/nologin stepsbot
+sudo useradd --system --home-dir /opt/stepsbot --shell /usr/sbin/nologin stepsbot
 sudo mkdir -p /opt/stepsbot
 sudo chown stepsbot:stepsbot /opt/stepsbot
 sudo -u stepsbot git clone https://github.com/ilya-lysenko-An/stepsBot.git /opt/stepsbot
