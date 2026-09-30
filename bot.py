@@ -294,9 +294,8 @@ def payment_prompt(user_id: int) -> str:
     if nxt is None or nxt["type"] != "active":
         return ""
 
-    deadline = datetime.date.fromisoformat(nxt["date_from"]) - datetime.timedelta(days=1)
     return phrases.payment_block(
-        nxt["name"], deadline.strftime("%d.%m.%Y"), nxt["entry_fee"], links
+        nxt["name"], config.deadline_phrase(nxt), nxt["entry_fee"], links
     )
 
 

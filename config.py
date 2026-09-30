@@ -143,6 +143,29 @@ def show_payment_prompt(day: datetime.date) -> bool:
     return day.isoformat() in PAYMENT_PROMPT_DATES
 
 
+# До какого числа нового месяца принимается взнос. 2 — «оплатить до 2 октября»,
+# то есть первые два дня месяца остаются на перевод.
+# Задаётся в token.env: PAYMENT_DEADLINE_DAY=2
+try:
+    PAYMENT_DEADLINE_DAY = int(os.getenv("PAYMENT_DEADLINE_DAY") or 2)
+except ValueError:
+    PAYMENT_DEADLINE_DAY = 2
+
+
+def payment_deadline(season):
+    """Дата, до которой платят взнос за этот месяц."""
+    start = datetime.date.fromisoformat(season["date_from"])
+    end = datetime.date.fromisoformat(season["date_to"])
+    day = min(max(PAYMENT_DEADLINE_DAY, 1), end.day)
+    return start.replace(day=day)
+
+
+def deadline_phrase(season) -> str:
+    """«2 октября» — для фразы «оплатить до ...»."""
+    d = payment_deadline(season)
+    return f"{d.day} {MONTH_RU_GEN.get(season['name'], '')}".strip()
+
+
 # ---------- работа с датами и сезонами ----------
 def now_msk() -> datetime.datetime:
     return datetime.datetime.now(MSK)
