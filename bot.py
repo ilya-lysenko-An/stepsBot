@@ -272,6 +272,34 @@ def closed_day_reply(action: str, remaining: int, steps: int, season, user_id: i
     return "Записал."
 
 
+def payment_prompt(user_id: int) -> str:
+    """
+    Блок со ссылками на сборы — или пустая строка.
+
+    Показываем только в даты из config.PAYMENT_PROMPT_DATES и только тем, кто
+    ещё в игре: выбывшим следующий месяц оплачивать незачем.
+    """
+    day = today_msk()
+    if not config.show_payment_prompt(day):
+        return ""
+    if database.get_out_of_game(user_id):
+        return ""
+
+    links = config.payment_links()
+    if not links:
+        return ""
+
+    season = config.season_for_day(day)
+    nxt = config.next_season(season["name"]) if season else None
+    if nxt is None or nxt["type"] != "active":
+        return ""
+
+    deadline = datetime.date.fromisoformat(nxt["date_from"]) - datetime.timedelta(days=1)
+    return phrases.payment_block(
+        nxt["name"], deadline.strftime("%d.%m.%Y"), nxt["entry_fee"], links
+    )
+
+
 async def safe_send_message(bot, chat_id: int, text: str, reply_markup=None) -> bool:
     try:
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
@@ -462,10 +490,9 @@ def build_register_text() -> str:
         "Победителей трое, выбираются случайно: 75% банка им поровну, 25% — организаторам.",
     ]
 
-    if config.PAYMENT_URL or config.PAYMENT_CONTACT:
-        lines += ["", f"По взносу ({config.ENTRY_FEE} ₽ за месяц) — {config.PAYMENT_CONTACT}."]
-        if config.PAYMENT_URL:
-            lines.append(f"Ссылка на перевод: {config.PAYMENT_URL}")
+    lines += ["", f"По взносу ({config.ENTRY_FEE} ₽ за месяц) — {config.PAYMENT_CONTACT}."]
+    for name, url in config.payment_links():
+        lines.append(f"• {name}: {url}")
 
     return "\n".join(lines)
 
@@ -744,7 +771,7 @@ async def save_steps(update: Update, user_id: int, day: datetime.date, steps: in
 
     text = (open_day_reply(user_id, season, steps) if is_today
             else closed_day_reply(action, remaining, steps, season, user_id))
-    await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(text + payment_prompt(user_id), reply_markup=MAIN_KEYBOARD)
 
 
 async def handle_state(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:

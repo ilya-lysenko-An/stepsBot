@@ -186,6 +186,23 @@ def leaders_header(total: int, active: int, out: int, days_left: int) -> str:
     return line
 
 
+# ---------- сборы на следующий месяц ----------
+
+def payment_block(month: str, deadline_str: str, fee: int, links) -> str:
+    """Блок со ссылками на сборы, приклеивается к ответу на шаги."""
+    month_ru = config.MONTH_RU.get(month, month)
+    lines = [
+        "",
+        f"💰 Взнос за {month_ru} — {fee} ₽, оплатить до {deadline_str}.",
+    ]
+    for name, url in links:
+        lines.append(f"• {name}: {url}")
+    if len(links) > 1:
+        lines.append("Любой из двух сборов на выбор — куда удобнее.")
+    lines.append(f"Уже оплатил — просто не обращай внимания. Вопросы: {config.PAYMENT_CONTACT}")
+    return "\n".join(lines)
+
+
 # ---------- 3.6 уведомление о выбытии ----------
 
 def dropout_notice(reason: str = "violation") -> str:

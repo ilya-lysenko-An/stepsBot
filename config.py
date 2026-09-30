@@ -117,10 +117,30 @@ CHANNEL_ID = "@begogram_ch"
 CHANNEL_URL = "https://t.me/begogram_ch"
 INVITE_CHAT_URL = "https://t.me/+jQApV8d7yuU1YWEy"
 
-# Реквизиты для оплаты. Задаётся в token.env: PAYMENT_URL=...
-# Исторически ссылка лежала в ключе URL — поддерживаем оба варианта.
-PAYMENT_URL = os.getenv("PAYMENT_URL") or os.getenv("URL") or ""
+# Реквизиты для оплаты. Задаются в token.env.
+# Исторически ссылка на Т-Банк лежала в ключе URL — поддерживаем оба варианта.
+PAYMENT_TBANK_URL = os.getenv("TBANK_URL") or os.getenv("PAYMENT_URL") or os.getenv("URL") or ""
+PAYMENT_SBER_URL = os.getenv("SBER_URL") or ""
 PAYMENT_CONTACT = os.getenv("PAYMENT_CONTACT") or "@begogram_org"
+
+
+def payment_links():
+    """[(название, ссылка), ...] — только те сборы, для которых задана ссылка."""
+    pairs = (("Т-Банк", PAYMENT_TBANK_URL), ("Сбер", PAYMENT_SBER_URL))
+    return [(name, url) for name, url in pairs if url]
+
+
+# Даты, в которые к ответу на шаги приклеивается блок со сборами на следующий
+# месяц. Чтобы добавить ещё одну, допишите её через запятую в token.env:
+#   PAYMENT_PROMPT_DATES=2026-09-30,2026-10-31
+PAYMENT_PROMPT_DATES = {
+    d.strip() for d in (os.getenv("PAYMENT_PROMPT_DATES") or "2026-09-30").split(",")
+    if d.strip()
+}
+
+
+def show_payment_prompt(day: datetime.date) -> bool:
+    return day.isoformat() in PAYMENT_PROMPT_DATES
 
 
 # ---------- работа с датами и сезонами ----------

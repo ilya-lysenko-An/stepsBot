@@ -179,6 +179,48 @@ async def main():
     config.now_msk = lambda: datetime.datetime.combine(
         FAKE_TODAY, datetime.time(20, 0), tzinfo=config.MSK)
 
+    print("\n=== 8.5 Ссылки на сборы 30.09 ===")
+    config.PAYMENT_TBANK_URL = "https://tbank.example/cf/AAA"
+    config.PAYMENT_SBER_URL = "https://sber.example/cf/BBB"
+    config.PAYMENT_PROMPT_DATES = {"2026-09-30"}
+
+    # Аня после блока с напоминанием осталась с незакрытым недобором за 05.09 —
+    # приводим её в чистое состояние, иначе пересчёт справедливо выбьет её.
+    database.upsert_daily_status(uid["anna"], "2026-09-05", 11000, 1, "+", "ok",
+                                 season="september")
+    database.set_out_of_game(uid["anna"], 0)
+
+    day(datetime.date(2026, 9, 29))
+    config.now_msk = lambda: datetime.datetime.combine(
+        FAKE_TODAY, datetime.time(20, 0), tzinfo=config.MSK)
+    reply = await submit("anna", 101, "Аня", datetime.date(2026, 9, 29), 11000)
+    ok("29.09 ссылок нет", "tbank.example" not in reply)
+
+    day(datetime.date(2026, 9, 30))
+    reply = await submit("anna", 101, "Аня", datetime.date(2026, 9, 30), 11000)
+    ok("30.09 есть ссылка Т-Банка", "https://tbank.example/cf/AAA" in reply)
+    ok("30.09 есть ссылка Сбера", "https://sber.example/cf/BBB" in reply)
+    ok("указан октябрь", "октябрь" in reply, reply.split("💰")[-1].split(chr(10))[0])
+    ok("указан дедлайн 30.09.2026", "30.09.2026" in reply)
+    # фраза про норму выбирается случайно, поэтому проверяем структуру:
+    # сначала ответ про шаги, блок со сборами — приписка в конце
+    ok("блок со сборами приписан в конец, а не заменил ответ",
+       not reply.startswith("💰") and reply.index("💰") > 20, reply[:40])
+
+    # выбытие ставим 'manual': 'violation' пересчитался бы обратно, ведь
+    # нарушение Глеба мы починили в блоке 7
+    database.set_out_of_game(uid["gleb"], 1, "manual")
+    reply = await submit("gleb", 104, "Глеб", datetime.date(2026, 9, 30), 11000)
+    ok("выбывшему сборы не показываем", "tbank.example" not in reply, reply[:50])
+    database.set_out_of_game(uid["gleb"], 0)
+
+    # в ноябре следующего активного месяца нет — просить не за что
+    day(datetime.date(2026, 11, 30))
+    config.PAYMENT_PROMPT_DATES = {"2026-11-30"}
+    reply = await submit("anna", 101, "Аня", datetime.date(2026, 11, 30), 12000)
+    ok("в конце ноября сборов нет", "tbank.example" not in reply)
+    config.PAYMENT_PROMPT_DATES = {"2026-09-30"}
+
     print("\n=== 9. Ручное закрытие дня организатором ===")
     day(datetime.date(2026, 9, 10))
     u = FakeUpdate(admin)
