@@ -1047,3 +1047,34 @@ def get_last_draw():
             FROM draw_results ORDER BY id DESC LIMIT 1
         """)
         return cur.fetchone()
+
+
+# ================= итоги месяца =================
+
+def get_month_rows(date_from: str, date_to: str):
+    """
+    Срез по каждому участнику за месяц.
+
+    [(user_id, username, first_name, out_of_game, дней_с_записью,
+      сумма_шагов, дней_бонусом, нарушений), ...]
+    """
+    with get_con() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                u.id,
+                u.username,
+                u.first_name,
+                u.out_of_game,
+                COUNT(d.id),
+                COALESCE(SUM(d.steps_value), 0),
+                COALESCE(SUM(CASE WHEN d.bonus_used = 1 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN d.result = '-' THEN 1 ELSE 0 END), 0)
+            FROM users u
+            LEFT JOIN daily_status d
+                ON d.user_id = u.id AND d.day_msk BETWEEN ? AND ?
+            WHERE u.is_active = 1
+            GROUP BY u.id, u.username, u.first_name, u.out_of_game
+            ORDER BY 6 DESC, u.id
+        """, (date_from, date_to))
+        return cur.fetchall()

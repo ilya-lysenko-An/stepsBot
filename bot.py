@@ -1287,6 +1287,100 @@ async def cmd_run_final_draw(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(f"Разослано участникам: {sent}.")
 
 
+def _num(n) -> str:
+    """12457 -> «12 457»: длинные числа в отчёте иначе не читаются."""
+    return f"{int(n):,}".replace(",", " ")
+
+
+def build_month_report(season) -> list:
+    """Итоги месяца. Возвращает список сообщений — отчёт не влезает в одно."""
+    date_from, date_to = season["date_from"], season["date_to"]
+    goal = season["daily_goal"]
+    month_ru = config.MONTH_RU[season["name"]]
+    start, end = config.season_dates(season)
+    total_days = (end - start).days + 1
+
+    rows = [r for r in database.get_month_rows(date_from, date_to) if r[4] > 0]
+    if not rows:
+        return [f"За {month_ru} записей шагов нет — считать нечего."]
+
+    total_steps = sum(r[5] for r in rows)
+    total_bonus_days = sum(r[6] for r in rows)
+    finished = [r for r in rows if not r[3]]
+    dropped = [r for r in rows if r[3]]
+    perfect = [r for r in rows if r[6] == 0 and r[7] == 0 and r[4] >= total_days]
+
+    avg_per_day = total_steps // (sum(r[4] for r in rows) or 1)
+    best = database.get_max_day(date_from, date_to)
+
+    head = [
+        f"📊 Итоги {config.MONTH_RU_GEN[season['name']]}",
+        "",
+        f"🎯 Норма дня: {_num(goal)}",
+        f"👥 Участвовало: {len(rows)}",
+        f"🟢 Дошли до конца: {len(finished)}",
+        f"🔴 Выбыло: {len(dropped)}",
+        "",
+        f"👟 Всего пройдено: {_num(total_steps)} шагов",
+        f"📈 В среднем за день на человека: {_num(avg_per_day)}",
+        f"🎟 Дней закрыто бонусами: {total_bonus_days}",
+        f"💪 Без бонусов и пропусков весь месяц: {len(perfect)}",
+    ]
+    if best:
+        b_username, b_first, b_steps, b_day = best
+        b_date = datetime.date.fromisoformat(b_day).strftime("%d.%m")
+        head.append(f"🏆 Лучший день: {_display(b_username, b_first)} — "
+                    f"{_num(b_steps)} ({b_date})")
+
+    head += ["", "Топ-10 по сумме шагов:"]
+    for i, r in enumerate(rows[:10], start=1):
+        avg = r[5] // r[4]
+        head.append(f"{i}) {_display(r[1], r[2])} — {_num(r[5])} · ср. {_num(avg)}")
+
+    messages = ["\n".join(head)]
+
+    # Полная таблица отдельным сообщением: в одно всё не влезает.
+    table = [f"📋 {month_ru.capitalize()}: все участники", ""]
+    for i, r in enumerate(rows, start=1):
+        avg = r[5] // r[4]
+        mark = "🔴" if r[3] else "🟢"
+        tail = f" · 🎟{r[6]}" if r[6] else ""
+        table.append(f"{i}) {mark} {_display(r[1], r[2])} — {_num(r[5])} · "
+                     f"ср. {_num(avg)} · дней {r[4]}{tail}")
+    messages.append("\n".join(table))
+    return messages
+
+
+@admin_only
+async def cmd_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Итоги месяца.
+
+    /month_stats       — последний завершившийся месяц
+    /month_stats sep   — конкретный месяц
+    """
+    args = context.args or []
+    if args:
+        month = config.normalize_month(args[0])
+        if month is None:
+            await update.message.reply_text(
+                "Не понял месяц. Формат: /month_stats sep (или oct, nov, jul, aug)"
+            )
+            return
+        season = config.season_by_name(month)
+    else:
+        # последний месяц, который уже закончился
+        today = today_msk().isoformat()
+        past = [s for s in config.SEASONS if s["date_to"] < today]
+        season = past[-1] if past else config.current_season()
+        if season is None:
+            await update.message.reply_text("Завершившихся месяцев пока нет.")
+            return
+
+    for text in build_month_report(season):
+        await update.message.reply_text(text)
+
+
 @admin_only
 async def cmd_admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -1302,6 +1396,7 @@ async def cmd_admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/run_daily_check [дата] — закрыть день вручную (по умолчанию вчерашний)\n"
         "/run_final_draw [send] — розыгрыш (без send — только показать)\n\n"
         "Отчёты:\n"
+        "/month_stats [месяц] — итоги месяца, можно слать в канал\n"
         "/stats_all — сводка\n"
         "/admin_log — журнал действий\n\n"
         "<user> — это @username, telegram_id или внутренний id."
@@ -1517,6 +1612,7 @@ def main():
     app.add_handler(CommandHandler("run_daily_check", cmd_run_daily_check))
     app.add_handler(CommandHandler("run_passive_bonuses", cmd_run_passive_bonuses))
     app.add_handler(CommandHandler("run_final_draw", cmd_run_final_draw))
+    app.add_handler(CommandHandler("month_stats", cmd_month_stats))
     app.add_handler(CommandHandler("stats_all", cmd_stats_all))
     app.add_handler(CommandHandler("admin_log", cmd_admin_log))
     app.add_handler(CommandHandler("admin", cmd_admin_help))
